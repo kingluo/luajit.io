@@ -1,0 +1,521 @@
+local ffi = require("ffi")
+local bit = require("bit")
+
+ffi.cdef[[
+extern int errno;
+
+struct in_addr {
+	unsigned int  s_addr;
+};
+struct sockaddr_in {
+  short int  sin_family;	 /* Address family			   */
+  unsigned short int				sin_port;	   /* Port number				  */
+  struct in_addr		sin_addr;	   /* Internet address			 */
+
+  /* Pad to size of `struct sockaddr'. */
+  unsigned char		 __pad[16 - sizeof(short int) -
+						sizeof(unsigned short int) - sizeof(struct in_addr)];
+};
+struct sockaddr {
+	short int sa_family;
+	char sa_data[14];
+};
+short int ntohs(short int netshort);
+short int htons(short int hostshort);
+int inet_aton(const char *cp, struct in_addr *inp);
+char *inet_ntoa(struct in_addr in);
+
+extern int socket(int domain, int type, int protocol);
+extern int bind(int sockfd, const struct sockaddr *addr,
+		unsigned int addrlen);
+extern int connect(int sockfd, const struct sockaddr *addr,
+		   unsigned int addrlen);
+extern int listen(int sockfd, int backlog);
+extern int accept(int sockfd, struct sockaddr *addr, unsigned int *addrlen);
+
+char *strerror(int errnum);
+
+typedef int ssize_t;
+typedef unsigned int size_t;
+extern ssize_t read(int fd, void *buf, size_t count);
+extern ssize_t write(int fd, const void *buf, size_t count);
+
+typedef union epoll_data {
+	void		*ptr;
+	int		  fd;
+	int	 u32;
+	long	 u64;
+} epoll_data_t;
+
+struct epoll_event {
+	int	 events;	  /* Epoll events */
+	epoll_data_t data;		/* User data variable */
+};
+
+extern int epoll_create(int size);
+extern int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
+extern int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout);
+
+extern int setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen);
+
+int fork(void);
+int getpid(void);
+
+typedef struct {
+	unsigned long int __val[1024 / (8 * sizeof (unsigned long int))];
+} sigset_t;
+int signalfd(int fd, const sigset_t *mask, int flags);
+
+typedef unsigned int uint32_t;
+typedef int int32_t;
+typedef unsigned long long uint64_t;
+typedef long long int64_t;
+typedef unsigned char uint8_t;
+struct signalfd_siginfo {
+	uint32_t ssi_signo;
+	int32_t ssi_errno;
+	int32_t ssi_code;
+	uint32_t ssi_pid;
+	uint32_t ssi_uid;
+	int32_t ssi_fd;
+	uint32_t ssi_tid;
+	uint32_t ssi_band;
+	uint32_t ssi_overrun;
+	uint32_t ssi_trapno;
+	int32_t ssi_status;
+	int32_t ssi_int;
+	uint64_t ssi_ptr;
+	uint64_t ssi_utime;
+	uint64_t ssi_stime;
+	uint64_t ssi_addr;
+	uint8_t __pad[48];
+};
+int sigemptyset(sigset_t *set);
+int sigaddset(sigset_t *set, int signum);
+int sigdelset(sigset_t *set, int signum);
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+
+unsigned int sleep(unsigned int seconds);
+int close(int fd);
+int ioctl(int d, int request, ...);
+
+typedef int time_t;
+struct timespec {
+   time_t tv_sec;                /* Seconds */
+   long   tv_nsec;               /* Nanoseconds */
+};
+
+struct itimerspec {
+   struct timespec it_interval;  /* Interval for periodic timer */
+   struct timespec it_value;     /* Initial expiration */
+};
+int timerfd_create(int clockid, int flags);
+
+int timerfd_settime(int fd, int flags,
+				   const struct itimerspec *new_value,
+				   struct itimerspec *old_value);
+
+typedef uint64_t eventfd_t;
+int eventfd(unsigned int initval, int flags);
+int eventfd_read(int fd, eventfd_t *value);
+int eventfd_write(int fd, eventfd_t value);
+]]
+
+EPOLL_CTL_ADD=1
+EPOLL_CTL_DEL=2
+EPOLL_CTL_MOD=3
+
+EPOLLIN=0x1
+EPOLLPRI=0x2
+EPOLLOUT=0x4
+EPOLLERR=0x8
+EPOLLHUP=0x10
+EPOLLET=0x8000
+
+AF_INET=2
+SOCKET_STREAM=1
+
+SOL_SOCKET=1
+SO_REUSEADDR=2
+
+SIGCHLD=17
+SIG_BLOCK=0
+
+FIONBIO=0x5421
+
+CLOCK_MONOTONIC=1
+
+function bind(fd, ip, port)
+   local addr = ffi.new("struct sockaddr_in")
+   addr.sin_family = AF_INET
+   addr.sin_port = ffi.C.htons(port)
+   ffi.C.inet_aton(ip, addr.sin_addr)
+   return ffi.C.bind(fd, ffi.cast("struct sockaddr*",addr), 16)
+end
+
+function accept(fd)
+	local addr = ffi.new("struct sockaddr_in[1]")
+	local len = ffi.new("unsigned int[1]", ffi.sizeof(addr))
+	local cfd = ffi.C.accept(fd, ffi.cast("struct sockaddr *",addr), len)
+	local val = ffi.cast("unsigned short",ffi.C.ntohs(addr[0].sin_port))
+	local port = tonumber(val)
+	local ip = ffi.string(ffi.C.inet_ntoa(addr[0].sin_addr))
+	return cfd, ip, port
+end
+
+function set_nonblock(fd)
+	local flag = ffi.new("int[1]",1)
+	assert(ffi.C.ioctl(fd, FIONBIO, flag) == 0)
+end
+
+function epoll_ctl(pfd, fd, cmd, ...)
+	if cmd ~= EPOLL_CTL_DEL then
+		local ev = ffi.new("struct epoll_event")
+		ev.events = bit.bor(...)
+		ev.data.fd = fd
+		assert(ffi.C.epoll_ctl(pfd, cmd, fd, ev) == 0)
+	else
+		assert(ffi.C.epoll_ctl(pfd, cmd, fd, nil) == 0)
+	end
+end
+
+function timerfd_settime(fd, sec, nsec)
+	sec = sec or 0
+	nsec = nsec or 0
+	local timespec = ffi.new("struct itimerspec")
+	timespec.it_value.tv_sec = sec
+	timespec.it_value.tv_nsec = nsec
+	assert(ffi.C.timerfd_settime(fd, 0, timespec, nil) == 0)
+end
+
+local READ_ALL = 1
+local READ_LINE = 2
+local READ_LEN = 3
+local EAGAIN = 11
+local EINTR = 4
+
+local socket_mt = {__index = {}}
+local MAX_RBUF_LEN = 4096
+
+function socket_mt.__index.receive(self, pattern)
+	if not self.rbuf_c then self.rbuf_c = ffi.new("char[?]", MAX_RBUF_LEN) end
+	if not self.rbuf then self.rbuf = "" end
+	local mode
+	if not pattern or pattern == '*l' then
+		mode = READ_LINE
+	elseif pattern == '*a' then
+		mode = READ_ALL
+	elseif type(pattern) == 'number' then
+		mode = READ_LEN
+	end
+
+	while true do
+		if self.rbuf ~= "" then
+			if mode == READ_LINE then
+				local la,lb = string.find(self.rbuf, '\r\n')
+				if la then
+					local str = string.sub(self.rbuf, 1, la-1)
+					self.rbuf = string.sub(self.rbuf, lb+1)
+					return str
+				end
+			elseif mode == READ_LEN and #self.rbuf >= pattern then
+				local str = string.sub(self.rbuf, 1, pattern)
+				self.rbuf = string.sub(self.rbuf, pattern+1)
+				return str
+			end
+		end
+
+		local len = ffi.C.read(self.fd, self.rbuf_c, MAX_RBUF_LEN)
+		local errno = ffi.C.errno
+		if len > 0 then
+			self.rbuf = self.rbuf .. ffi.string(self.rbuf_c, len)
+		end
+		if (len == 0 or len < MAX_RBUF_LEN) and mode == READ_ALL then
+			local str = self.rbuf
+			self.rbuf = ""
+			return str
+		end
+		if len == -1 then
+			if errno == EAGAIN then
+				coroutine.yield(false)
+			elseif errno ~= EINTR then
+				coroutine.yield(true)
+			end
+		end
+	end
+end
+
+local function socket_create(fd)
+	return setmetatable({fd = fd}, socket_mt)
+end
+
+function unescape(s)
+	s = string.gsub(s,"+"," ")
+	return (string.gsub(s, "%%(%x%x)", function(hex)
+		return string.char(tonumber(hex, 16))
+	end))
+end
+
+-----------------------------------------------------------------------------
+-- Parses a url and returns a table with all its parts according to RFC 2396
+-- The following grammar describes the names given to the URL parts
+-- <url> ::= <scheme>://<authority>/<path>;<params>?<query>#<fragment>
+-- <authority> ::= <userinfo>@<host>:<port>
+-- <userinfo> ::= <user>[:<password>]
+-- <path> :: = {<segment>/}<segment>
+-- Input
+--   url: uniform resource locator of request
+--   default: table with default values for each field
+-- Returns
+--   table with the following fields, where RFC naming conventions have
+--   been preserved:
+--     scheme, authority, userinfo, user, password, host, port,
+--     path, params, query, fragment
+-- Obs:
+--   the leading '/' in {/<path>} is considered part of <path>
+-----------------------------------------------------------------------------
+function parse_url(url, default)
+	-- initialize default parameters
+	local parsed = {}
+	for i,v in pairs(default or parsed) do parsed[i] = v end
+
+	-- get fragment
+	url = string.gsub(url, "#(.*)$", function(f)
+		parsed.fragment = f
+		return ""
+	end)
+
+	-- get scheme
+	url = string.gsub(url, "^([%w][%w%+%-%.]*)%:",
+		function(s) parsed.scheme = s; return "" end)
+
+	-- get authority
+	url = string.gsub(url, "^//([^/]*)", function(n)
+		parsed.authority = n
+		return ""
+	end)
+
+	-- get query string
+	url = string.gsub(url, "%?(.*)", function(q)
+		for k,v in string.gmatch(line,"([^&=]+)=([^&=]+)") do
+			parsed.query[k] = unescape(v)
+		end
+		return ""
+	end)
+
+	-- path is whatever was left
+	if url ~= "" then parsed.path = unescape(url) end
+	local authority = parsed.authority
+	if not authority then return parsed end
+	authority = string.gsub(authority,"^([^@]*)@",
+		function(u) parsed.userinfo = u; return "" end)
+	authority = string.gsub(authority, ":([^:%]]*)$",
+		function(p) parsed.port = p; return "" end)
+	if authority ~= "" then
+		-- IPv6?
+		parsed.host = string.match(authority, "^%[(.+)%]$") or authority
+	end
+	local userinfo = parsed.userinfo
+	if not userinfo then return parsed end
+	userinfo = string.gsub(userinfo, ":([^:]*)$",
+		function(p) parsed.password = p; return "" end)
+	parsed.user = userinfo
+
+	return parsed
+end
+
+local function receive_headers(sock, headers)
+	local line, name, value, err
+	headers = headers or {}
+	-- get first line
+	line, err = sock:receive()
+	if err then return nil, err end
+	-- headers go until a blank line is found
+	while line ~= "" do
+		-- get field-name and value
+		name, value = string.match(line, "^(.-):%s*(.*)")
+		if not (name and value) then return nil, "malformed reponse headers" end
+		name = string.lower(name)
+		-- get next line (value might be folded)
+		line, err = sock:receive()
+		if err then return nil, err end
+		-- unfold any folded values
+		while string.find(line, "^%s") do
+			value = value .. line
+			line = sock:receive()
+			if err then return nil, err end
+		end
+		-- save pair in table
+		if headers[name] then headers[name] = headers[name] .. ", " .. value
+		else headers[name] = value end
+	end
+
+	return headers
+end
+
+function receive_body(sock, headers, chunk_handler)
+	local length = tonumber(headers["content-length"])
+	if not length or length < 0 then return false, 'invalid content-length' end
+	local t = headers["transfer-encoding"]
+	if t and t ~= "identity" then
+		while true do
+			local line, err = sock:receive()
+			if err then return false, err end
+			-- get chunk size, skip extention
+			local size = tonumber(string.gsub(line, ";.*", ""), 16)
+			if not size then return false, "invalid chunk size" end
+			-- was it the last chunk?
+			if size > 0 then
+				-- if not, get chunk and skip terminating CRLF
+				local chunk, err = sock:receive(size)
+				if chunk then sock:receive() else return false, err end
+				chunk_handler(chunk)
+			else
+				-- if it was, read trailers into headers table
+				receive_headers(sock, headers)
+				break
+			end
+		end
+	elseif length then
+		local len
+		while true do
+			if length > MAX_RBUF_LEN then
+				len = MAX_RBUF_LEN
+			elseif length == 0 then
+				break
+			else
+				assert(length > 0)
+				len = length
+			end
+			length = length - len
+			local chunk, err = sock:receive(len)
+			chunk_handler(chunk)
+		end
+		return true
+	end
+	return false, 'invalid body'
+end
+
+local function http_request_handler(sock)
+	local line = sock:receive()
+	local method,url,ver = string.match(line, "(.*) (.*) HTTP/(%d%.%d)")
+	local headers = receive_headers(sock)
+	return true
+end
+
+--#--
+
+local MAX_EPOLL_EVENT = 128
+local ev_set = ffi.new("struct epoll_event[?]", MAX_EPOLL_EVENT)
+
+local mask = ffi.new("sigset_t")
+ffi.C.sigemptyset(mask)
+ffi.C.sigaddset(mask, SIGCHLD)
+ffi.C.sigprocmask(SIG_BLOCK, mask, NULL)
+local xfd = ffi.C.signalfd(-1, mask, 0)
+
+local pfd = ffi.C.epoll_create(20000)
+epoll_ctl(pfd, xfd, EPOLL_CTL_ADD, EPOLLIN)
+
+local sk = ffi.C.socket(AF_INET, SOCKET_STREAM, 0)
+local option = ffi.new("int[1]", 1)
+assert(ffi.C.setsockopt(sk, SOL_SOCKET, SO_REUSEADDR, ffi.cast("void*",option), ffi.sizeof("int")) == 0)
+assert(bind(sk, "127.0.0.1", 8080) == 0)
+assert(ffi.C.listen(sk, 100) == 0)
+set_nonblock(sk)
+
+local MAX_CONN_PER_PROC = 2
+local child_n = 2
+local efds = {}
+for i=1,child_n do
+	local efd = ffi.C.eventfd(0, 0)
+	assert(efd > 0)
+	table.insert(efds, efd)
+	local pid = ffi.C.fork()
+	if pid == 0 then
+		print("child pid=" .. ffi.C.getpid() .. " enter")
+		local handlers = {}
+		local connections = 0
+		ffi.C.close(pfd)
+		ffi.C.close(xfd)
+		local pfd2 = ffi.C.epoll_create(20000)
+		local wait_listen_sk = false
+
+		-- add event fd
+		epoll_ctl(pfd2, efd, EPOLL_CTL_ADD, EPOLLIN, EPOLLET)
+
+		-- add timer fd
+		local timer_fd = ffi.C.timerfd_create(CLOCK_MONOTONIC, 0)
+		assert(timer_fd > 0)
+		--timerfd_settime(timer_fd, 1, 0)
+		epoll_ctl(pfd2, timer_fd, EPOLL_CTL_ADD, EPOLLIN)
+
+		while true do
+			if (not wait_listen_sk) and connections < MAX_CONN_PER_PROC then
+				print("child pid=" .. ffi.C.getpid() .. " listen sk")
+				epoll_ctl(pfd2, sk, EPOLL_CTL_ADD, EPOLLIN)
+				wait_listen_sk = true
+			end
+			print("child pid=" .. ffi.C.getpid() .. " epoll_wait enter...")
+			assert(ffi.C.epoll_wait(pfd2, ev_set, MAX_EPOLL_EVENT, -1) == 1)
+			print("child pid=" .. ffi.C.getpid() .. " epoll_wait exit...")
+			if ev_set[0].data.fd == sk then
+				print("child pid=" .. ffi.C.getpid() .. " accept enter...")
+				local cfd,ip,port = accept(sk)
+				print("child pid=" .. ffi.C.getpid() .. " accept exit...")
+				if cfd > 0 then
+					set_nonblock(cfd)
+					print("child pid=" .. ffi.C.getpid() .. " get new connection, cfd=" .. cfd .. ", port=" .. port)
+					local sock = socket_create(cfd)
+					handlers[cfd] = coroutine.create(function() return http_request_handler(sock) end)
+					epoll_ctl(pfd2, cfd, EPOLL_CTL_ADD, EPOLLIN, EPOLLET)
+
+					connections = connections + 1
+					if connections >= MAX_CONN_PER_PROC then
+						print("child pid=" .. ffi.C.getpid() .. " unlisten sk")
+						epoll_ctl(pfd2, sk, EPOLL_CTL_DEL)
+						wait_listen_sk = false
+					end
+				else
+					print("child pid=" .. ffi.C.getpid() .. " accept error, ignore")
+				end
+			elseif ev_set[0].data.fd == timer_fd then
+				print("child pid=" .. ffi.C.getpid() .. " timer fired")
+				timerfd_settime(timer_fd, 0, 0)
+			elseif ev_set[0].data.fd == efd then
+				local v = ffi.new("eventfd_t[1]")
+				ffi.C.eventfd_read(efd, v)
+				v = tonumber(v[0])
+				print("child pid=" .. ffi.C.getpid() .. " event fd fired, v=" .. v)
+			else
+				local fd = ev_set[0].data.fd
+				local handler = handlers[fd]
+				assert(handler)
+				local ret,exit_flag = coroutine.resume(handler)
+				if ret == false or exit_flag == true then
+					print("child pid=" .. ffi.C.getpid() .. " remove connection, cfd=" .. fd)
+					handlers[fd] = nil
+					ffi.C.close(ev_set[0].data.fd)
+					connections = connections - 1
+				end
+			end
+		end
+		print("child pid=" .. ffi.C.getpid() .. " exit")
+		os.exit(0)
+	end
+end
+
+-- local v = ffi.new("eventfd_t", 12)
+-- ffi.C.eventfd_write(efds[1], v)
+
+ffi.C.close(sk)
+print("parent wait " .. child_n .. " child")
+while child_n > 0 do
+	assert(ffi.C.epoll_wait(pfd, ev_set, MAX_EPOLL_EVENT, -1) == 1)
+	assert(ev_set[0].data.fd == xfd)
+	local siginfo = ffi.new("struct signalfd_siginfo")
+	assert(ffi.C.read(xfd, siginfo, ffi.sizeof("struct signalfd_siginfo")) == ffi.sizeof("struct signalfd_siginfo"))
+	print ("> child exit with pid=" .. siginfo.ssi_pid .. ", status=" .. siginfo.ssi_status)
+	child_n = child_n - 1
+end
+print "parent exit"
