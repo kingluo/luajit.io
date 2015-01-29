@@ -1,0 +1,14 @@
+# rsp.headers["content-type"] = "text/html; charset=utf-8"
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=zh_CN.UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>测试页面</title>
+	</head>
+	<body>
+# for i=1,2 do
+		<h3>${req.headers["user-agent"]}</h3>
+# end
+	</body>
+</html>

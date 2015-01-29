@@ -271,7 +271,7 @@ function io_mt.__index.send(self, str)
 end
 
 local function socket_create(fd, ip, port)
-	return setmetatable({fd = fd, ip=ip,port=port}, io_mt)
+	return setmetatable({fd=fd, ip=ip, port=port}, io_mt)
 end
 
 function unescape(s)
@@ -497,9 +497,33 @@ local function http_rsp_new(req, sock)
 	return setmetatable({__priv = {}, headers = {}, sock = sock, req = req}, http_rsp_mt)
 end
 
+local g_listen_sk_tbl = {}
 local g_http_cfg
 function http_conf(cf)
 	g_http_cfg = cf
+	local srv_tbl = {}
+	for _,srv in ipairs(g_http_cfg) do
+		for ip,port in string.gmatch(srv.listen, "([%d%.%*]+):(%d+)") do
+			if not srv_tbl[port] then srv_tbl[port] = {} end
+			if ip == '*' then
+				srv_tbl[port] = {['*']=1}
+			elseif not srv_tbl[port]['*'] then
+				srv_tbl[port][ip] = 1
+			end
+		end
+	end
+	local option = ffi.new("int[1]", 1)
+	for port,ip_set in pairs(srv_tbl) do
+		for ip,_ in pairs(ip_set) do
+			local sk = ffi.C.socket(AF_INET, SOCKET_STREAM, 0)
+			assert(ffi.C.setsockopt(sk, SOL_SOCKET, SO_REUSEADDR, ffi.cast("void*",option), ffi.sizeof("int")) == 0)
+			assert(bind(sk, ip, tonumber(port)) == 0)
+			assert(ffi.C.listen(sk, 100) == 0)
+			set_nonblock(sk)
+			g_listen_sk_tbl[sk] = socket_create(sk, ip, port)
+			g_listen_sk_tbl[sk].listen = ip .. ':' .. port
+		end
+	end
 end
 
 local g_args = {...}
@@ -508,49 +532,83 @@ assert(loadfile(conffile))()
 
 local function do_servlet(req, rsp)
 	local sk = req.sock
-	sk.ip = '127.0.0.1'; sk.port=8080
 	local target_srv
 	local host = req.headers["host"]
 	for _,srv in ipairs(g_http_cfg) do
-		if srv.listen == (sk.ip .. ':' .. sk.port) then
-			for _,sn in pairs(srv.server_name) do
-				if sn[1] == '~' then
-					if string.find(host, sn:sub(2)) then
+		if string.find(srv.listen, sk.listen, 1, true) then
+			for _,h in pairs(srv.host) do
+				if h == host then
+					target_srv = srv
+					break
+				elseif h:find('~',1,true) then
+					if string.find(host, h:sub(2)) then
 						target_srv = srv
 						break
 					end
-				elseif sn == host then
-					target_srv = srv
-					break
 				end
 			end
 			if not target_srv then target_srv = srv end
 		end
 	end
+
 	local servlet
 	if target_srv then
-		for _,slcf in ipairs(target_srv.servlet) do
-			local match_fn = slcf[1]
-			if type(match_fn) == 'string' then
-				if string.match(req.url.path, match_fn) then
-					servlet = slcf[2]
+		local longest_n = 0
+		local path = req.url.path
+		local idx
+		local match_done = false
+		for i,slcf in ipairs(target_srv.servlet) do
+			local modifier,pat = slcf[1],slcf[2]
+			if modifier == "=" then
+				if path == pat then
+					idx = i
+					match_done = true
 					break
 				end
-			elseif type(match_fn) == 'function' then
-				if match_fn(req) then
-					servlet = slcf[2]
-					break
+			elseif modifier == "^" or modifier == "^~" then
+				local s,e = string.find(path, pat, 1, true)
+				if s and e > longest_n then
+					longest_n, idx, match_done = e, i, (modifier == "^~")
 				end
 			end
 		end
+
+		if match_done == true then
+			servlet = target_srv.servlet[idx]
+		else
+			for i,slcf in ipairs(target_srv.servlet) do
+				local modifier,pat = slcf[1],slcf[2]
+				if modifier == "~" then
+					if string.find(path, pat) then
+						idx = i
+						break
+					end
+				elseif modifier == "~*" then
+					if string.find(string.lower(path), string.lower(pat)) then
+						idx = i
+						break
+					end
+				elseif modifier == "f"  then
+					if pat(req) then
+						idx = i
+						break
+					end
+				end
+			end
+			if idx then servlet = target_srv.servlet[idx] end
+		end
 	end
+
 	if servlet then
+		local fn = servlet[3]
+		local extra = servlet[4]
 		local err
-		if type(servlet) == 'string' then
-			servlet = require(servlet)
-			err = servlet.service(req,rsp)
-		elseif type(servlet) == 'function' then
-			err = servlet(req,rsp)
+		if type(fn) == 'string' then
+			fn = require(fn)
+			assert(fn)
+			err = fn.service(req,rsp,target_srv,extra)
+		elseif type(fn) == 'function' then
+			err = fn(req,rsp,target_srv,extra)
 		end
 		if not err then
 			if rsp.headers["transfer-encoding"] == "chunked" then
@@ -584,6 +642,12 @@ local function http_request_handler(sock)
 	return true
 end
 
+function do_all_sk(f)
+	for sk,sock in pairs(g_listen_sk_tbl) do
+		f(sk,sock)
+	end
+end
+
 --#--
 
 local MAX_EPOLL_EVENT = 128
@@ -597,13 +661,6 @@ local xfd = ffi.C.signalfd(-1, mask, 0)
 
 local pfd = ffi.C.epoll_create(20000)
 epoll_ctl(pfd, xfd, EPOLL_CTL_ADD, EPOLLIN)
-
-local sk = ffi.C.socket(AF_INET, SOCKET_STREAM, 0)
-local option = ffi.new("int[1]", 1)
-assert(ffi.C.setsockopt(sk, SOL_SOCKET, SO_REUSEADDR, ffi.cast("void*",option), ffi.sizeof("int")) == 0)
-assert(bind(sk, "127.0.0.1", 8080) == 0)
-assert(ffi.C.listen(sk, 100) == 0)
-set_nonblock(sk)
 
 local MAX_CONN_PER_PROC = 2
 local child_n = 2
@@ -634,27 +691,32 @@ for i=1,child_n do
 		while true do
 			if (not wait_listen_sk) and connections < MAX_CONN_PER_PROC then
 				print("child pid=" .. ffi.C.getpid() .. " listen sk")
-				epoll_ctl(pfd2, sk, EPOLL_CTL_ADD, EPOLLIN)
+				do_all_sk(function(sk) epoll_ctl(pfd2, sk, EPOLL_CTL_ADD, EPOLLIN) end)
 				wait_listen_sk = true
 			end
 			print("child pid=" .. ffi.C.getpid() .. " epoll_wait enter...")
 			assert(ffi.C.epoll_wait(pfd2, ev_set, MAX_EPOLL_EVENT, -1) == 1)
 			print("child pid=" .. ffi.C.getpid() .. " epoll_wait exit...")
-			if ev_set[0].data.fd == sk then
+			if g_listen_sk_tbl[ev_set[0].data.fd] then
 				print("child pid=" .. ffi.C.getpid() .. " accept enter...")
-				local cfd,ip,port = accept(sk)
+				local cfd,ip,port = accept(ev_set[0].data.fd)
 				print("child pid=" .. ffi.C.getpid() .. " accept exit...")
 				if cfd > 0 then
 					set_nonblock(cfd)
 					print("child pid=" .. ffi.C.getpid() .. " get new connection, cfd=" .. cfd .. ", port=" .. port)
-					local sock = socket_create(cfd)
-					handlers[cfd] = coroutine.create(function() return http_request_handler(sock) end)
+					local sock = socket_create(cfd, ip, port)
+					sock.listen = g_listen_sk_tbl[ev_set[0].data.fd].listen
+					handlers[cfd] = coroutine.create(function()
+						local r1,r2 = pcall(function() return http_request_handler(sock) end)
+						if r1 == false then print(r2) os.exit(1) end
+						return r2
+					end)
 					epoll_ctl(pfd2, cfd, EPOLL_CTL_ADD, EPOLLIN, EPOLLET)
 
 					connections = connections + 1
 					if connections >= MAX_CONN_PER_PROC then
 						print("child pid=" .. ffi.C.getpid() .. " unlisten sk")
-						epoll_ctl(pfd2, sk, EPOLL_CTL_DEL)
+						do_all_sk(function(sk) epoll_ctl(pfd2, sk, EPOLL_CTL_DEL) end)
 						wait_listen_sk = false
 					end
 				else
@@ -689,7 +751,7 @@ end
 -- local v = ffi.new("eventfd_t", 12)
 -- ffi.C.eventfd_write(efds[1], v)
 
-ffi.C.close(sk)
+do_all_sk(function(sk) ffi.C.close(sk) end)
 print("parent wait " .. child_n .. " child")
 while child_n > 0 do
 	assert(ffi.C.epoll_wait(pfd, ev_set, MAX_EPOLL_EVENT, -1) == 1)

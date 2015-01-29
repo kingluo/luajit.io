@@ -1,5 +1,5 @@
--- package.path = '/usr/local/share/lua/5.1/?.lua;/home/resty/?.lua;'
--- package.cpath = '/usr/local/lib/lua/5.1/?.so;'
+package.path = package.path .. ';./modules/?.lua'
+package.cpath = package.cpath .. ';./modules/?.so'
 
 local function test_servlet(req, rsp, cf, extra)
 	return rsp:say("hello world, conf ok!\n")
@@ -8,24 +8,40 @@ end
 http_conf {
 	-- server blocks
 	{
-		listen = "127.0.0.1:8080",
-		-- listen = 80,
-		server_name = {"example.com", "~.*%.example%.com"},
-		-- server_name = "localhost",
-		root = "/srv/mytest",
+		listen = "192.168.8.30:8080",
+		-- if host prefixed by "~", denotes regular pattern matching
+		-- otherwise, do exact compare
+		host = {"example.com", "~.*%.example%.com"},
+		root = "./",
 		default_type = 'text/plain',
 		servlet = {
-			-- match in array order
-			-- {(<url match pattern>|<match function>), (<module name>|<servlet function>)}, [<extra>]
-			{"%.lsp$", "lsp_mod"},
-			{"^/static/files/", "static_mod"},
+			-- same match rule as Nginx location directive
+			-- see http://nginx.org/en/docs/http/ngx_http_core_module.html#location
+			-- Add two new modifiers:
+			-- "^" explicitly denotes longest prefix matching
+			-- "f" denotes matching function
+			-- {<Nginx-style modifier> (<url match pattern>|<match function>), (<module name>|<servlet function>)}, [<extra>]
+			{"=", "/test", "test_mod"},
+			{"^", "/foobar", "foobar_mod"},
+			{"~", "%.lux$", "lux_mod"},
+			{"^", "/foobar/files/", "static_mod"},
 			{
+				"f",
 				function(req)
 					return true
 				end,
 				test_servlet,
 				{foo=1,bar="hello"}
 			},
+		}
+	},
+	{
+		listen = "192.168.8.30:8080; 127.0.0.1:8080; *:9090; 127.0.0.1:10000",
+		host = {"example.net"},
+		root = "/srv/foobar",
+		default_type = 'text/plain',
+		servlet = {
+			{"^", "/static/files/", "static_mod"}
 		}
 	},
 }
