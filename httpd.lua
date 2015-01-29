@@ -194,10 +194,10 @@ local READ_LEN = 3
 local EAGAIN = 11
 local EINTR = 4
 
-local socket_mt = {__index = {}}
+local io_mt = {__index = {}}
 local MAX_RBUF_LEN = 4096
 
-function socket_mt.__index.receive(self, pattern)
+function io_mt.__index.receive(self, pattern)
 	if not self.rbuf_c then self.rbuf_c = ffi.new("char[?]", MAX_RBUF_LEN) end
 	if not self.rbuf then self.rbuf = "" end
 	local mode
@@ -229,24 +229,49 @@ function socket_mt.__index.receive(self, pattern)
 		local errno = ffi.C.errno
 		if len > 0 then
 			self.rbuf = self.rbuf .. ffi.string(self.rbuf_c, len)
-		end
-		if (len == 0 or len < MAX_RBUF_LEN) and mode == READ_ALL then
-			local str = self.rbuf
-			self.rbuf = ""
-			return str
-		end
-		if len == -1 then
-			if errno == EAGAIN then
-				coroutine.yield(false)
-			elseif errno ~= EINTR then
-				coroutine.yield(true)
+		elseif len == 0 then
+			-- for socket, means broken?
+			-- how about for fd of other types?
+			return nil, 'socket broken'
+		elseif errno == EAGAIN then
+			if self.rbuf ~= "" and mode == READ_ALL then
+				local str = self.rbuf
+				self.rbuf = ""
+				return str
+			else
+				local err = coroutine.yield(false)
+				if err then return nil,err end
 			end
+		elseif errno ~= EINTR then
+			return nil, ffi.string(ffi.C.strerror(errno))
 		end
 	end
 end
 
-local function socket_create(fd)
-	return setmetatable({fd = fd}, socket_mt)
+function io_mt.__index.send(self, str)
+	local buf = str
+	local buflen = #str
+
+	while true do
+		if buflen == 0 then return true end
+		local len = ffi.C.write(self.fd, buf, buflen)
+		local errno = ffi.C.errno
+		if len == buflen then
+			return true
+		elseif len > 0 then
+			buflen = buflen - len
+			buf = string.sub(buf, len + 1)
+			coroutine.yield(false)
+		elseif len == 0 or errno == EAGAIN then
+			coroutine.yield(false)
+		elseif errno ~= EINTR then
+			return false, ffi.string(ffi.C.strerror(errno))
+		end
+	end
+end
+
+local function socket_create(fd, ip, port)
+	return setmetatable({fd = fd, ip=ip,port=port}, io_mt)
 end
 
 function unescape(s)
@@ -297,7 +322,8 @@ function parse_url(url, default)
 
 	-- get query string
 	url = string.gsub(url, "%?(.*)", function(q)
-		for k,v in string.gmatch(line,"([^&=]+)=([^&=]+)") do
+		parsed.query = {}
+		for k,v in string.gmatch(q,"([^&=]+)=([^&=]+)") do
 			parsed.query[k] = unescape(v)
 		end
 		return ""
@@ -396,10 +422,165 @@ function receive_body(sock, headers, chunk_handler)
 	return false, 'invalid body'
 end
 
+local http_req_mt = {__index={}}
+function http_req_mt.__index.read_body(self, sink)
+	if self.method ~= 'POST' then return "only support POST" end
+	if not self.__priv.body_read then
+		receive_body(self.sock, self.headers, sink)
+		self.__priv.body_read = true
+	end
+end
+
+local status_tbl = {
+	[200] = "HTTP/1.1 200 OK\r\n";
+	[400] = "HTTP/1.1 400 Bad Request\r\n";
+	[403] = "HTTP/1.1 403 Forbidden\r\n";
+	[404] = "HTTP/1.1 404 Not Found\r\n";
+	[500] = "HTTP/1.1 500 Internal Server Error\r\n";
+	[501] = "HTTP/1.1 501 Not Implemented\r\n";
+	[503] = "HTTP/1.1 503 Service Unavailable\r\n";
+}
+
+local http_rsp_mt = {__index={}}
+function http_rsp_mt.__index.say(self, str)
+	local sk = self.sock
+
+	if not self.__priv.headers_sent then
+		local status = status_tbl[self.status or 200] or status_tbl[500]
+		local ret,err = sk:send(status)
+		if err then return err end
+
+		-- adjust headers
+		if not self.headers["content-length"] then
+			self.headers["transfer-encoding"] = "chunked"
+		end
+		if not self.headers["content-type"] then
+			self.headers["content-type"] = "text/plain; charset=utf-8"
+		end
+
+		self.headers["server"] = "Lua-Httpd"
+		self.headers["date"] = "Thu, 29 Jan 2015 04:56:53 GMT"
+		self.headers["cache-control"] = "no-cache, private"
+		self.headers["connection"] = "Keep-Alive"
+
+		if self.req.headers["connection"] == "close" then
+			self.headers["connection"] = "close"
+		end
+
+		local h = "\r\n"
+		for f, v in pairs(self.headers) do
+			h = f .. ": " .. v .. "\r\n" .. h
+		end
+
+		local ret,err = sk:send(h)
+		if err then return err end
+		self.__priv.headers_sent = true
+	end
+
+	if self.headers["transfer-encoding"] == "chunked" then
+		local size = string.format("%X\r\n", string.len(str))
+		local ret,err = sk:send(size .. str .. "\r\n")
+		if err then return err end
+	else
+		local ret,err = sk:send(str)
+		if err then return err end
+	end
+end
+
+local function http_req_new(method, url, headers, sock)
+	return setmetatable({__priv = {},
+		method = method, url = url,
+		headers = headers, sock = sock}, http_req_mt)
+end
+
+local function http_rsp_new(req, sock)
+	return setmetatable({__priv = {}, headers = {}, sock = sock, req = req}, http_rsp_mt)
+end
+
+local g_http_cfg
+function http_conf(cf)
+	g_http_cfg = cf
+end
+
+local g_args = {...}
+local conffile = g_args[1] or "httpd_conf.lua"
+assert(loadfile(conffile))()
+
+local function do_servlet(req, rsp)
+	local sk = req.sock
+	sk.ip = '127.0.0.1'; sk.port=8080
+	local target_srv
+	local host = req.headers["host"]
+	for _,srv in ipairs(g_http_cfg) do
+		if srv.listen == (sk.ip .. ':' .. sk.port) then
+			for _,sn in pairs(srv.server_name) do
+				if sn[1] == '~' then
+					if string.find(host, sn:sub(2)) then
+						target_srv = srv
+						break
+					end
+				elseif sn == host then
+					target_srv = srv
+					break
+				end
+			end
+			if not target_srv then target_srv = srv end
+		end
+	end
+	local servlet
+	if target_srv then
+		for _,slcf in ipairs(target_srv.servlet) do
+			local match_fn = slcf[1]
+			if type(match_fn) == 'string' then
+				if string.match(req.url.path, match_fn) then
+					servlet = slcf[2]
+					break
+				end
+			elseif type(match_fn) == 'function' then
+				if match_fn(req) then
+					servlet = slcf[2]
+					break
+				end
+			end
+		end
+	end
+	if servlet then
+		local err
+		if type(servlet) == 'string' then
+			servlet = require(servlet)
+			err = servlet.service(req,rsp)
+		elseif type(servlet) == 'function' then
+			err = servlet(req,rsp)
+		end
+		if not err then
+			if rsp.headers["transfer-encoding"] == "chunked" then
+				local ret
+				ret,err = rsp.sock:send("0\r\n\r\n")
+			end
+		end
+		if err then
+			print(err)
+			return false
+		end
+	else
+		print "no servlet"
+	end
+end
+
 local function http_request_handler(sock)
-	local line = sock:receive()
-	local method,url,ver = string.match(line, "(.*) (.*) HTTP/(%d%.%d)")
-	local headers = receive_headers(sock)
+	while true do
+		local line,err = sock:receive()
+		if err then print(err); break end
+		local method,url,ver = string.match(line, "(.*) (.*) HTTP/(%d%.%d)")
+		url = parse_url(url)
+		local headers = receive_headers(sock)
+		local req = http_req_new(method, url, headers, sock)
+		local rsp = http_rsp_new(req, sock)
+		local success = do_servlet(req, rsp)
+		if (success == false) or headers["connection"] == "close" then
+			break
+		end
+	end
 	return true
 end
 
