@@ -2,6 +2,7 @@ package.path = package.path .. ';./modules/?.lua'
 package.cpath = package.cpath .. ';./modules/?.so'
 
 local function test_servlet(req, rsp, cf, extra)
+	coroutine.yield(YIELD_IDLE)
 	return rsp:say("hello world, conf ok!\n")
 end
 

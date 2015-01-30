@@ -100,6 +100,33 @@ int close(int fd);
 int ioctl(int d, int request, ...);
 
 typedef int time_t;
+typedef long suseconds_t;
+time_t time(time_t *t);
+struct tm {
+   int tm_sec;         /* seconds */
+   int tm_min;         /* minutes */
+   int tm_hour;        /* hours */
+   int tm_mday;        /* day of the month */
+   int tm_mon;         /* month */
+   int tm_year;        /* year */
+   int tm_wday;        /* day of the week */
+   int tm_yday;        /* day in the year */
+   int tm_isdst;       /* daylight saving time */
+};
+struct tm *gmtime(const time_t *timep);
+struct tm *localtime(const time_t *timep);
+
+struct timeval {
+	time_t      tv_sec;     /* seconds */
+	suseconds_t tv_usec;    /* microseconds */
+};
+struct timezone {
+	int tz_minuteswest;     /* minutes west of Greenwich */
+	int tz_dsttime;         /* type of DST correction */
+};
+int gettimeofday(struct timeval *tv, struct timezone *tz);
+size_t strftime(char *s, size_t max, const char *format, const struct tm *tm);
+
 struct timespec {
    time_t tv_sec;                /* Seconds */
    long   tv_nsec;               /* Nanoseconds */
@@ -156,6 +183,13 @@ EINTR = 4
 
 IPPROTO_TCP=6
 TCP_CORK=3
+
+-- coroutine yield flag
+YIELD_IO = 1
+YIELD_TIMER = 2
+YIELD_IDLE = 3
+YIELD_EXIT = 4
+YIELD_WAIT = 5
 
 function bind(fd, ip, port)
    local addr = ffi.new("struct sockaddr_in")
@@ -249,7 +283,7 @@ function io_mt.__index.receive(self, pattern)
 				self.rbuf = ""
 				return str
 			else
-				local err = coroutine.yield(false)
+				local err = coroutine.yield(YIELD_IO, self.fd)
 				if err then return nil,err end
 			end
 		elseif errno ~= EINTR then
@@ -263,13 +297,12 @@ function io_mt.__index.send(self, ...)
 		self.iovec = ffi.new("struct iovec[?]", 64)
 	end
 	local iovec = self.iovec
-	local tbl = {n=select('#',...); ...}
-	local iovcnt = tbl.n
 	local total = 0
+	local iovcnt = select('#', ...)
 	for i=0,iovcnt-1 do
-		local i2 = i+1
-		iovec[i].iov_base = ffi.cast("void*",tbl[i2])
-		local len = #(tbl[i2])
+		local s = select(i+1, ...)
+		iovec[i].iov_base = ffi.cast("void *", s)
+		local len = #s
 		iovec[i].iov_len = len
 		total = total + len
 	end
@@ -296,9 +329,9 @@ function io_mt.__index.send(self, ...)
 					break
 				end
 			end
-			coroutine.yield(false)
+			coroutine.yield(YIELD_IO, self.fd)
 		elseif errno == EAGAIN then
-			coroutine.yield(false)
+			coroutine.yield(YIELD_IO, self.fd)
 		elseif errno ~= EINTR then
 			return false, ffi.string(ffi.C.strerror(errno))
 		end
@@ -677,13 +710,96 @@ local function http_request_handler(sock)
 			break
 		end
 	end
-	return true
+	return YIELD_EXIT
 end
 
 function do_all_listen_sk(f)
 	for sk,sock in pairs(g_listen_sk_tbl) do
 		f(sk,sock)
 	end
+end
+
+--#--
+
+local g_timers = {}
+local timer_mt = {
+	__index = {
+		cancel = function(self)
+			self.timeout = -1
+		end
+	}
+}
+
+function add_timer(fn, sec, msec)
+	sec = sec or 0
+	msec = msec or 0
+	local tv = ffi.new("struct timeval")
+	assert(ffi.C.gettimeofday(tv, nil) == 0)
+	local timer = setmetatable({
+		sec=tv.tv_sec+sec,
+		msec=tv.tv_usec/1000 + msec,
+		timeout=(tv.tv_sec+sec)*1000 + tv.tv_usec/1000 + msec,
+		fn=fn
+	}, timer_mt)
+	table.insert(g_timers, timer)
+	table.sort(g_timers, function(a, b)
+		return a.timeout < b.timeout
+	end)
+	return timer
+end
+
+local function process_all_timers()
+	local tv = ffi.new("struct timeval")
+	assert(ffi.C.gettimeofday(tv, nil) == 0)
+	local now = tv.tv_sec*1000 + tv.tv_usec/1000
+	local ntimer = #g_timers
+	for i=1,ntimer do
+		local t = g_timers[1]
+		if t.timeout < now then
+			if t.timeout ~= -1 then
+				t.fn()
+			end
+			table.remove(g_timers,1)
+		else
+			break
+		end
+	end
+
+	local t = g_timers[1]
+	if t then
+		local sec = t.sec - tv.tv_sec
+		local msec = tv.tv_usec/1000
+		if  msec > t.msec then
+			sec = sec - 1
+			msec = t.msec + 1000 - msec
+		else
+			msec = t.msec - msec
+		end
+		assert(sec >= 0 and msec >= 0)
+		return sec, msec * 1000 * 1000
+	end
+end
+
+--#--
+
+local g_yield_threads = {
+	[YIELD_IO]  = {},
+	[YIELD_IDLE] = {},
+}
+
+function co_resume(co, ...)
+	local r,flag,data = coroutine.resume(co, ...)
+	if r == true then
+		if flag == YIELD_IO then
+			if not g_yield_threads[YIELD_IO][data] then
+				g_yield_threads[YIELD_IO][data] = {}
+			end
+			table.insert(g_yield_threads[YIELD_IO][data], co)
+		elseif flag == YIELD_IDLE then
+			table.insert(g_yield_threads[YIELD_IDLE], co)
+		end
+	end
+	return r,flag,data
 end
 
 --#--
@@ -705,7 +821,7 @@ local master_epoll_fd = ffi.C.epoll_create(20000)
 epoll_ctl(master_epoll_fd, xfd, EPOLL_CTL_ADD, EPOLLIN)
 
 local MAX_CONN_PER_PROC = 2
-local child_n = 2
+local child_n = 1
 local efds = {}
 for i=1,child_n do
 	local efd = ffi.C.eventfd(0, 0)
@@ -714,7 +830,7 @@ for i=1,child_n do
 	local pid = ffi.C.fork()
 	if pid == 0 then
 		print("child pid=" .. ffi.C.getpid() .. " enter")
-		local YIELD_CONNECTION, YIELD_TIMER, YIELD_IDLE, YIELD_IO = 1,2,3,4
+
 		local handlers = {}
 		local connections = 0
 		ffi.C.close(master_epoll_fd)
@@ -726,63 +842,99 @@ for i=1,child_n do
 		epoll_ctl(g_epoll_fd, efd, EPOLL_CTL_ADD, EPOLLIN, EPOLLET)
 
 		-- add timer fd
+		local timer_fd_fired = false
 		local timer_fd = ffi.C.timerfd_create(CLOCK_MONOTONIC, 0)
 		assert(timer_fd > 0)
-		--timerfd_settime(timer_fd, 1, 0)
 		epoll_ctl(g_epoll_fd, timer_fd, EPOLL_CTL_ADD, EPOLLIN)
 
 		while true do
+			-- listen all server sockets
 			if (not wait_listen_sk) and connections < MAX_CONN_PER_PROC then
 				print("child pid=" .. ffi.C.getpid() .. " listen sk")
 				do_all_listen_sk(function(sk) epoll_ctl(g_epoll_fd, sk, EPOLL_CTL_ADD, EPOLLIN) end)
 				wait_listen_sk = true
 			end
-			print("child pid=" .. ffi.C.getpid() .. " epoll_wait enter...")
-			assert(ffi.C.epoll_wait(g_epoll_fd, ev_set, MAX_EPOLL_EVENT, -1) == 1)
-			print("child pid=" .. ffi.C.getpid() .. " epoll_wait exit...")
-			if g_listen_sk_tbl[ev_set[0].data.fd] then
-				print("child pid=" .. ffi.C.getpid() .. " accept enter...")
-				local cfd,ip,port = accept(ev_set[0].data.fd)
-				print("child pid=" .. ffi.C.getpid() .. " accept exit...")
-				if cfd > 0 then
-					set_nonblock(cfd)
-					print("child pid=" .. ffi.C.getpid() .. " get new connection, cfd=" .. cfd .. ", port=" .. port)
-					local sock = socket_create(cfd, ip, port)
-					sock.listen = g_listen_sk_tbl[ev_set[0].data.fd].listen
-					handlers[cfd] = coroutine.create(function()
-						local r1,r2 = pcall(function() return http_request_handler(sock) end)
-						if r1 == false then print(r2) os.exit(1) end
-						return r2
-					end)
-					epoll_ctl(g_epoll_fd, cfd, EPOLL_CTL_ADD, EPOLLIN, EPOLLET)
 
-					connections = connections + 1
-					if connections >= MAX_CONN_PER_PROC then
-						print("child pid=" .. ffi.C.getpid() .. " unlisten sk")
-						do_all_listen_sk(function(sk) epoll_ctl(g_epoll_fd, sk, EPOLL_CTL_DEL) end)
-						wait_listen_sk = false
-					end
-				else
-					print("child pid=" .. ffi.C.getpid() .. " accept error, ignore")
+			-- process all expiry timers and set timerfd if needed
+			if timer_fd_fired then
+				local sec,nsec = process_all_timers()
+				if sec then
+					timerfd_settime(timer_fd, sec, nsec)
 				end
-			elseif ev_set[0].data.fd == timer_fd then
-				print("child pid=" .. ffi.C.getpid() .. " timer fired")
-				timerfd_settime(timer_fd, 0, 0)
-			elseif ev_set[0].data.fd == efd then
-				local v = ffi.new("eventfd_t[1]")
-				ffi.C.eventfd_read(efd, v)
-				v = tonumber(v[0])
-				print("child pid=" .. ffi.C.getpid() .. " event fd fired, v=" .. v)
-			else
-				local fd = ev_set[0].data.fd
-				local handler = handlers[fd]
-				assert(handler)
-				local ret,exit_flag = coroutine.resume(handler)
-				if ret == false or exit_flag == true then
-					print("child pid=" .. ffi.C.getpid() .. " remove connection, cfd=" .. fd)
-					handlers[fd] = nil
-					ffi.C.close(ev_set[0].data.fd)
-					connections = connections - 1
+				timer_fd_fired = false
+			end
+
+			-- wakeup idle threads
+			local wait_timeout = -1
+			local idle_threads = g_yield_threads[YIELD_IDLE]
+			for i=1,#idle_threads do
+				co_resume(idle_threads[i])
+			end
+			if #idle_threads > 0 then wait_timeout = 0 end
+
+			print("child pid=" .. ffi.C.getpid() .. " epoll_wait enter...")
+			local nevents = ffi.C.epoll_wait(g_epoll_fd, ev_set, MAX_EPOLL_EVENT, wait_timeout)
+			print("child pid=" .. ffi.C.getpid() .. " epoll_wait exit...")
+
+			for ev_idx=0,nevents-1 do
+				if g_listen_sk_tbl[ev_set[ev_idx].data.fd] then
+					print("child pid=" .. ffi.C.getpid() .. " accept enter...")
+					local cfd,ip,port = accept(ev_set[ev_idx].data.fd)
+					print("child pid=" .. ffi.C.getpid() .. " accept exit...")
+					if cfd > 0 then
+						set_nonblock(cfd)
+						print("child pid=" .. ffi.C.getpid() .. " get new connection, cfd=" .. cfd .. ", port=" .. port)
+						local sock = socket_create(cfd, ip, port)
+						sock.listen = g_listen_sk_tbl[ev_set[ev_idx].data.fd].listen
+						local co = coroutine.create(function()
+							local r1,r2 = pcall(function() return http_request_handler(sock) end)
+							if r1 == false then print(r2) os.exit(1) end
+							return r2
+						end)
+
+						local ret,flag = co_resume(co)
+						if (ret == false or flag == YIELD_EXIT) then
+							print("child pid=" .. ffi.C.getpid() .. " * remove connection, cfd=" .. fd)
+							ffi.C.close(ev_set[ev_idx].data.fd)
+						else
+							handlers[cfd] = co
+							epoll_ctl(g_epoll_fd, cfd, EPOLL_CTL_ADD, EPOLLIN, EPOLLET)
+							connections = connections + 1
+							if connections >= MAX_CONN_PER_PROC then
+								print("child pid=" .. ffi.C.getpid() .. " unlisten sk")
+								do_all_listen_sk(function(sk) epoll_ctl(g_epoll_fd, sk, EPOLL_CTL_DEL) end)
+								wait_listen_sk = false
+							end
+						end
+					else
+						print("child pid=" .. ffi.C.getpid() .. " accept error, ignore")
+					end
+				elseif ev_set[ev_idx].data.fd == timer_fd then
+					print("child pid=" .. ffi.C.getpid() .. " timer fired")
+					timerfd_settime(timer_fd, 0, 0)
+					timer_fd_fired = true
+				elseif ev_set[ev_idx].data.fd == efd then
+					local v = ffi.new("eventfd_t[1]")
+					ffi.C.eventfd_read(efd, v)
+					v = tonumber(v[0])
+					print("child pid=" .. ffi.C.getpid() .. " event fd fired, v=" .. v)
+				else
+					local fd = ev_set[ev_idx].data.fd
+					local handler = handlers[fd]
+					local co_tbl = g_yield_threads[YIELD_IO][fd]
+					if co_tbl then
+						for i=1,#co_tbl do
+							local co = co_tbl[1]
+							local ret,flag = co_resume(co)
+							if (ret == false or flag == YIELD_EXIT) and co == handler then
+								print("child pid=" .. ffi.C.getpid() .. " remove connection, cfd=" .. fd)
+								handlers[fd] = nil
+								ffi.C.close(ev_set[ev_idx].data.fd)
+								connections = connections - 1
+							end
+							table.remove(co_tbl,i)
+						end
+					end
 				end
 			end
 		end

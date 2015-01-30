@@ -52,7 +52,7 @@ local function service(req, rsp, cf)
 			break
 		elseif errno == EAGAIN then
 			epoll_ctl(g_epoll_fd, rsp.sock.fd, EPOLL_CTL_MOD, EPOLLIN, EPOLLOUT)
-			coroutine.yield(false)
+			coroutine.yield(YIELD_IO, rsp.sock.fd)
 			epoll_ctl(g_epoll_fd, rsp.sock.fd, EPOLL_CTL_MOD, EPOLLIN)
 		elseif errno ~= EINTR then
 			err = ffi.string(ffi.C.strerror(errno))
