@@ -58,19 +58,6 @@ local function lux_compile(str,env)
 	return fn()
 end
 
-local function lux_execute(fn, req, rsp)
-	local out = {}
-	local res,err = xpcall(function() fn(req, rsp,
-	function(s)
-		out[#out+1] = s
-	end) end,debug.traceback)
-	if not res then
-		if env._debug then print(code) end
-		return nil,err
-	end
-	return table.concat(out)
-end
-
 local function service(req, rsp, cf)
 	if not lux_cache[req.url.path] then
 		local path = (cf.root or ".") .. '/' .. req.url.path
@@ -81,9 +68,13 @@ local function service(req, rsp, cf)
 		lux_cache[req.url.path] = lux_compile(str, {_parent=_G})
 	end
 
-	local out = lux_execute(lux_cache[req.url.path], req, rsp)
-	rsp.headers["content-length"] = #out
-	rsp:say(out)
+	local fn = lux_cache[req.url.path]
+	local ret,err = pcall(function()
+		fn(req, rsp, function(s) rsp:say(s) end)
+	end)
+	if ret == false then
+		return err
+	end
 end
 
 return {service = service}

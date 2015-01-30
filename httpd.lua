@@ -119,6 +119,12 @@ typedef uint64_t eventfd_t;
 int eventfd(unsigned int initval, int flags);
 int eventfd_read(int fd, eventfd_t *value);
 int eventfd_write(int fd, eventfd_t value);
+
+struct iovec {
+   void  *iov_base;    /* Starting address */
+   size_t iov_len;     /* Number of bytes to transfer */
+};
+ssize_t writev(int fd, const struct iovec *iov, int iovcnt);
 ]]
 
 EPOLL_CTL_ADD=1
@@ -248,21 +254,46 @@ function io_mt.__index.receive(self, pattern)
 	end
 end
 
-function io_mt.__index.send(self, str)
-	local buf = str
-	local buflen = #str
+function io_mt.__index.send(self, ...)
+	if not self.iovec then
+		self.iovec = ffi.new("struct iovec[?]", 64)
+	end
+	local iovec = self.iovec
+	local tbl = {n=select('#',...); ...}
+	local iovcnt = tbl.n
+	local total = 0
+	for i=0,iovcnt-1 do
+		local i2 = i+1
+		iovec[i].iov_base = ffi.cast("void*",tbl[i2])
+		local len = #(tbl[i2])
+		iovec[i].iov_len = len
+		total = total + len
+	end
 
+	local idx = 0
 	while true do
-		if buflen == 0 then return true end
-		local len = ffi.C.write(self.fd, buf, buflen)
+		if total == 0 then return true end
+		local len = ffi.C.writev(self.fd, iovec[idx], iovcnt)
 		local errno = ffi.C.errno
-		if len == buflen then
+		if len == total then
 			return true
 		elseif len > 0 then
-			buflen = buflen - len
-			buf = string.sub(buf, len + 1)
+			total = total - len
+			for i=idx,iovcnt-1 do
+				if iovec[i].io_len <= len then
+					len = len - iovec[i].io_len
+					idx = idx + 1
+					iovcnt = iovcnt - 1
+					if len == 0 then break end
+				else
+					iovec[i].iov_base = ffi.cast("void*",
+						string.sub(iovec[i].iov_base, len + 1))
+					iovec[i].iov_len = iovec[i].iov_len - len
+					break
+				end
+			end
 			coroutine.yield(false)
-		elseif len == 0 or errno == EAGAIN then
+		elseif errno == EAGAIN then
 			coroutine.yield(false)
 		elseif errno ~= EINTR then
 			return false, ffi.string(ffi.C.strerror(errno))
@@ -442,10 +473,10 @@ local status_tbl = {
 }
 
 local http_rsp_mt = {__index={}}
-function http_rsp_mt.__index.say(self, str)
-	local sk = self.sock
 
+function http_rsp_mt.__index.send_headers(self)
 	if not self.__priv.headers_sent then
+		local sk = self.sock
 		local status = status_tbl[self.status or 200] or status_tbl[500]
 		local ret,err = sk:send(status)
 		if err then return err end
@@ -476,10 +507,17 @@ function http_rsp_mt.__index.say(self, str)
 		if err then return err end
 		self.__priv.headers_sent = true
 	end
+end
+
+function http_rsp_mt.__index.say(self, str)
+	local err = self:send_headers()
+	if err then return err end
+
+	local sk = self.sock
 
 	if self.headers["transfer-encoding"] == "chunked" then
 		local size = string.format("%X\r\n", string.len(str))
-		local ret,err = sk:send(size .. str .. "\r\n")
+		local ret,err = sk:send(size, str, "\r\n")
 		if err then return err end
 	else
 		local ret,err = sk:send(str)
@@ -676,7 +714,7 @@ for i=1,child_n do
 		local connections = 0
 		ffi.C.close(pfd)
 		ffi.C.close(xfd)
-		local pfd2 = ffi.C.epoll_create(20000)
+		pfd2 = ffi.C.epoll_create(20000)
 		local wait_listen_sk = false
 
 		-- add event fd

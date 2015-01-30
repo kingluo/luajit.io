@@ -12,7 +12,7 @@ http_conf {
 		-- if host prefixed by "~", denotes regular pattern matching
 		-- otherwise, do exact compare
 		host = {"example.com", "~.*%.example%.com"},
-		root = "./",
+		root = ".",
 		default_type = 'text/plain',
 		servlet = {
 			-- same match rule as Nginx location directive
@@ -24,7 +24,7 @@ http_conf {
 			{"=", "/test", "test_mod"},
 			{"^", "/foobar", "foobar_mod"},
 			{"~", "%.lux$", "lux_mod"},
-			{"^", "/foobar/files/", "static_mod"},
+			{"^~", "/files/", "static_mod"},
 			{
 				"f",
 				function(req)
