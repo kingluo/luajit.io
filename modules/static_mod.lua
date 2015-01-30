@@ -22,11 +22,6 @@ local mime_types = {
 	["js"] = "application/x-javascript",
 }
 
-local IPPROTO_TCP=6
-local TCP_CORK=3
-
-local EAGAIN = 11
-
 local function service(req, rsp, cf)
 	local option = ffi.new("int[1]", 1)
 	assert(ffi.C.setsockopt(rsp.sock.fd, IPPROTO_TCP, TCP_CORK, ffi.cast("void*",option), ffi.sizeof("int")) == 0)
@@ -56,9 +51,9 @@ local function service(req, rsp, cf)
 			err = "sendfile: socket broekn"
 			break
 		elseif errno == EAGAIN then
-			epoll_ctl(pfd2, rsp.sock.fd, EPOLL_CTL_MOD, EPOLLIN, EPOLLOUT)
+			epoll_ctl(g_epoll_fd, rsp.sock.fd, EPOLL_CTL_MOD, EPOLLIN, EPOLLOUT)
 			coroutine.yield(false)
-			epoll_ctl(pfd2, rsp.sock.fd, EPOLL_CTL_MOD, EPOLLIN)
+			epoll_ctl(g_epoll_fd, rsp.sock.fd, EPOLL_CTL_MOD, EPOLLIN)
 		elseif errno ~= EINTR then
 			err = ffi.string(ffi.C.strerror(errno))
 			break

@@ -151,6 +151,12 @@ FIONBIO=0x5421
 
 CLOCK_MONOTONIC=1
 
+EAGAIN = 11
+EINTR = 4
+
+IPPROTO_TCP=6
+TCP_CORK=3
+
 function bind(fd, ip, port)
    local addr = ffi.new("struct sockaddr_in")
    addr.sin_family = AF_INET
@@ -197,8 +203,6 @@ end
 local READ_ALL = 1
 local READ_LINE = 2
 local READ_LEN = 3
-local EAGAIN = 11
-local EINTR = 4
 
 local io_mt = {__index = {}}
 local MAX_RBUF_LEN = 4096
@@ -564,10 +568,6 @@ function http_conf(cf)
 	end
 end
 
-local g_args = {...}
-local conffile = g_args[1] or "httpd_conf.lua"
-assert(loadfile(conffile))()
-
 local function do_servlet(req, rsp)
 	local sk = req.sock
 	local target_srv
@@ -680,13 +680,17 @@ local function http_request_handler(sock)
 	return true
 end
 
-function do_all_sk(f)
+function do_all_listen_sk(f)
 	for sk,sock in pairs(g_listen_sk_tbl) do
 		f(sk,sock)
 	end
 end
 
 --#--
+
+local g_args = {...}
+local conffile = g_args[1] or "httpd_conf.lua"
+assert(loadfile(conffile))()
 
 local MAX_EPOLL_EVENT = 128
 local ev_set = ffi.new("struct epoll_event[?]", MAX_EPOLL_EVENT)
@@ -697,8 +701,8 @@ ffi.C.sigaddset(mask, SIGCHLD)
 ffi.C.sigprocmask(SIG_BLOCK, mask, NULL)
 local xfd = ffi.C.signalfd(-1, mask, 0)
 
-local pfd = ffi.C.epoll_create(20000)
-epoll_ctl(pfd, xfd, EPOLL_CTL_ADD, EPOLLIN)
+local master_epoll_fd = ffi.C.epoll_create(20000)
+epoll_ctl(master_epoll_fd, xfd, EPOLL_CTL_ADD, EPOLLIN)
 
 local MAX_CONN_PER_PROC = 2
 local child_n = 2
@@ -710,30 +714,31 @@ for i=1,child_n do
 	local pid = ffi.C.fork()
 	if pid == 0 then
 		print("child pid=" .. ffi.C.getpid() .. " enter")
+		local YIELD_CONNECTION, YIELD_TIMER, YIELD_IDLE, YIELD_IO = 1,2,3,4
 		local handlers = {}
 		local connections = 0
-		ffi.C.close(pfd)
+		ffi.C.close(master_epoll_fd)
 		ffi.C.close(xfd)
-		pfd2 = ffi.C.epoll_create(20000)
+		g_epoll_fd = ffi.C.epoll_create(20000)
 		local wait_listen_sk = false
 
 		-- add event fd
-		epoll_ctl(pfd2, efd, EPOLL_CTL_ADD, EPOLLIN, EPOLLET)
+		epoll_ctl(g_epoll_fd, efd, EPOLL_CTL_ADD, EPOLLIN, EPOLLET)
 
 		-- add timer fd
 		local timer_fd = ffi.C.timerfd_create(CLOCK_MONOTONIC, 0)
 		assert(timer_fd > 0)
 		--timerfd_settime(timer_fd, 1, 0)
-		epoll_ctl(pfd2, timer_fd, EPOLL_CTL_ADD, EPOLLIN)
+		epoll_ctl(g_epoll_fd, timer_fd, EPOLL_CTL_ADD, EPOLLIN)
 
 		while true do
 			if (not wait_listen_sk) and connections < MAX_CONN_PER_PROC then
 				print("child pid=" .. ffi.C.getpid() .. " listen sk")
-				do_all_sk(function(sk) epoll_ctl(pfd2, sk, EPOLL_CTL_ADD, EPOLLIN) end)
+				do_all_listen_sk(function(sk) epoll_ctl(g_epoll_fd, sk, EPOLL_CTL_ADD, EPOLLIN) end)
 				wait_listen_sk = true
 			end
 			print("child pid=" .. ffi.C.getpid() .. " epoll_wait enter...")
-			assert(ffi.C.epoll_wait(pfd2, ev_set, MAX_EPOLL_EVENT, -1) == 1)
+			assert(ffi.C.epoll_wait(g_epoll_fd, ev_set, MAX_EPOLL_EVENT, -1) == 1)
 			print("child pid=" .. ffi.C.getpid() .. " epoll_wait exit...")
 			if g_listen_sk_tbl[ev_set[0].data.fd] then
 				print("child pid=" .. ffi.C.getpid() .. " accept enter...")
@@ -749,12 +754,12 @@ for i=1,child_n do
 						if r1 == false then print(r2) os.exit(1) end
 						return r2
 					end)
-					epoll_ctl(pfd2, cfd, EPOLL_CTL_ADD, EPOLLIN, EPOLLET)
+					epoll_ctl(g_epoll_fd, cfd, EPOLL_CTL_ADD, EPOLLIN, EPOLLET)
 
 					connections = connections + 1
 					if connections >= MAX_CONN_PER_PROC then
 						print("child pid=" .. ffi.C.getpid() .. " unlisten sk")
-						do_all_sk(function(sk) epoll_ctl(pfd2, sk, EPOLL_CTL_DEL) end)
+						do_all_listen_sk(function(sk) epoll_ctl(g_epoll_fd, sk, EPOLL_CTL_DEL) end)
 						wait_listen_sk = false
 					end
 				else
@@ -789,10 +794,10 @@ end
 -- local v = ffi.new("eventfd_t", 12)
 -- ffi.C.eventfd_write(efds[1], v)
 
-do_all_sk(function(sk) ffi.C.close(sk) end)
+do_all_listen_sk(function(sk) ffi.C.close(sk) end)
 print("parent wait " .. child_n .. " child")
 while child_n > 0 do
-	assert(ffi.C.epoll_wait(pfd, ev_set, MAX_EPOLL_EVENT, -1) == 1)
+	assert(ffi.C.epoll_wait(master_epoll_fd, ev_set, MAX_EPOLL_EVENT, -1) == 1)
 	assert(ev_set[0].data.fd == xfd)
 	local siginfo = ffi.new("struct signalfd_siginfo")
 	assert(ffi.C.read(xfd, siginfo, ffi.sizeof("struct signalfd_siginfo")) == ffi.sizeof("struct signalfd_siginfo"))
