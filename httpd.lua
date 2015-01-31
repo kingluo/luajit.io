@@ -188,7 +188,7 @@ TCP_CORK=3
 
 -- coroutine yield flag
 YIELD_IO = 1
-YIELD_TIMER = 2
+YIELD_SLEEP = 2
 YIELD_IDLE = 3
 YIELD_EXIT = 4
 YIELD_WAIT = 5
@@ -754,10 +754,12 @@ function add_timer(fn, sec, msec)
 end
 
 local function process_all_timers()
+	local ntimer = #g_timers
+	if ntimer == 0 then return nil end
+
 	local tv = ffi.new("struct timeval")
 	assert(ffi.C.gettimeofday(tv, nil) == 0)
 	local now = tv.tv_sec*1000 + tv.tv_usec/1000
-	local ntimer = #g_timers
 	for i=1,ntimer do
 		local t = g_timers[1]
 		if t.timeout < now then
@@ -769,20 +771,25 @@ local function process_all_timers()
 			break
 		end
 	end
+end
 
+local function get_next_interval()
+	local ntimer = #g_timers
+	if ntimer == 0 then return nil end
+
+	local tv = ffi.new("struct timeval")
+	assert(ffi.C.gettimeofday(tv, nil) == 0)
 	local t = g_timers[1]
-	if t then
-		local sec = t.sec - tv.tv_sec
-		local msec = tv.tv_usec/1000
-		if  msec > t.msec then
-			sec = sec - 1
-			msec = t.msec + 1000 - msec
-		else
-			msec = t.msec - msec
-		end
-		assert(sec >= 0 and msec >= 0)
-		return sec, msec * 1000 * 1000
+	local sec = t.sec - tv.tv_sec
+	local msec = tv.tv_usec/1000
+	if  msec > t.msec then
+		sec = sec - 1
+		msec = t.msec + 1000 - msec
+	else
+		msec = t.msec - msec
 	end
+	assert(sec >= 0 and msec >= 0)
+	return sec, msec * 1000 * 1000
 end
 
 --#--
@@ -791,9 +798,19 @@ local co_wait_io_list = {}
 local co_idle_list = setmetatable({},{__mode="v"})
 local co_info = {}
 
+function co_sleep(sec, msec)
+	local co = coroutine.running()
+	assert(co)
+	add_timer(function() co_resume(co) end, sec, msec)
+	co_yield(YIELD_SLEEP)
+end
+
 function co_resume(co, ...)
 	local cinfo = co_info[co]
-	assert(cinfo)
+	if not cinfo then
+		print"coroutine already killed, no problem?"
+		return false,"coroutine already killed"
+	end
 
 	local r,flag,data = coroutine.resume(co, ...)
 	if coroutine.status(co) == "dead" then
@@ -932,10 +949,10 @@ for i=1,child_n do
 		epoll_ctl(g_epoll_fd, efd, EPOLL_CTL_ADD, EPOLLIN, EPOLLET)
 
 		-- add timer fd
-		local timer_fd_fired = false
-		local timer_fd = ffi.C.timerfd_create(CLOCK_MONOTONIC, 0)
-		assert(timer_fd > 0)
-		epoll_ctl(g_epoll_fd, timer_fd, EPOLL_CTL_ADD, EPOLLIN)
+		local g_timer_set = false
+		local g_timer_fd = ffi.C.timerfd_create(CLOCK_MONOTONIC, 0)
+		assert(g_timer_fd > 0)
+		epoll_ctl(g_epoll_fd, g_timer_fd, EPOLL_CTL_ADD, EPOLLIN)
 
 		while true do
 			-- listen all server sockets
@@ -945,13 +962,13 @@ for i=1,child_n do
 				wait_listen_sk = true
 			end
 
-			-- process all expiry timers and set timerfd if needed
-			if timer_fd_fired then
-				local sec,nsec = process_all_timers()
+			-- set timer fd
+			if g_timer_set == false then
+				local sec, nsec = get_next_interval()
 				if sec then
-					timerfd_settime(timer_fd, sec, nsec)
+					g_timer_set = true
+					timerfd_settime(g_timer_fd, sec, nsec)
 				end
-				timer_fd_fired = false
 			end
 
 			-- wakeup idle threads
@@ -1000,10 +1017,11 @@ for i=1,child_n do
 					else
 						print("child pid=" .. ffi.C.getpid() .. " accept error, ignore")
 					end
-				elseif fd == timer_fd then
+				elseif fd == g_timer_fd then
 					print("child pid=" .. ffi.C.getpid() .. " timer fired")
-					timerfd_settime(timer_fd, 0, 0)
-					timer_fd_fired = true
+					process_all_timers()
+					timerfd_settime(g_timer_fd, 0, 0)
+					g_timer_set = false
 				elseif fd == efd then
 					local v = ffi.new("eventfd_t[1]")
 					ffi.C.eventfd_read(efd, v)
