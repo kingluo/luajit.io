@@ -51,9 +51,9 @@ local function service(req, rsp, cf)
 			err = "sendfile: socket broekn"
 			break
 		elseif errno == EAGAIN then
-			epoll_ctl(g_epoll_fd, rsp.sock.fd, EPOLL_CTL_MOD, EPOLLIN, EPOLLOUT)
-			coroutine.yield(YIELD_IO, rsp.sock.fd)
-			epoll_ctl(g_epoll_fd, rsp.sock.fd, EPOLL_CTL_MOD, EPOLLIN)
+			epoll_ctl(g_epoll_fd, rsp.sock.fd, EPOLL_CTL_MOD, EPOLLIN, EPOLLOUT, EPOLLET)
+			co_yield(YIELD_IO, rsp.sock.fd)
+			epoll_ctl(g_epoll_fd, rsp.sock.fd, EPOLL_CTL_MOD, EPOLLIN, EPOLLET)
 		elseif errno ~= EINTR then
 			err = ffi.string(ffi.C.strerror(errno))
 			break

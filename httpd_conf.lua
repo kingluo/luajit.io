@@ -2,8 +2,10 @@ package.path = package.path .. ';./modules/?.lua'
 package.cpath = package.cpath .. ';./modules/?.so'
 
 local function test_servlet(req, rsp, cf, extra)
-	coroutine.yield(YIELD_IDLE)
-	return rsp:say("hello world, conf ok!\n")
+	local co1 = co_spawn(function() rsp:say("hello world, conf ok!\n") end)
+	local co2 = co_spawn(function() rsp:say("hello xxx, conf ok!\n") end)
+	--co_wait(co1); co_wait(co2)
+	--return rsp:say("hello world, conf ok!\n")
 end
 
 http_conf {
@@ -22,7 +24,7 @@ http_conf {
 			-- "^" explicitly denotes longest prefix matching
 			-- "f" denotes matching function
 			-- {<Nginx-style modifier> (<url match pattern>|<match function>), (<module name>|<servlet function>)}, [<extra>]
-			{"=", "/test", "test_mod"},
+			{"=", "/test", test_servlet},
 			{"^", "/foobar", "foobar_mod"},
 			{"~", "%.lux$", "lux_mod"},
 			{"^~", "/files/", "static_mod"},

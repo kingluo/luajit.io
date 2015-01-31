@@ -1,3 +1,5 @@
+#!/usr/bin/env luajit
+
 local ffi = require("ffi")
 local bit = require("bit")
 
@@ -283,7 +285,7 @@ function io_mt.__index.receive(self, pattern)
 				self.rbuf = ""
 				return str
 			else
-				local err = coroutine.yield(YIELD_IO, self.fd)
+				local err = co_yield(YIELD_IO, self.fd)
 				if err then return nil,err end
 			end
 		elseif errno ~= EINTR then
@@ -308,6 +310,7 @@ function io_mt.__index.send(self, ...)
 	end
 
 	local idx = 0
+	local gc = {}
 	while true do
 		if total == 0 then return true end
 		local len = ffi.C.writev(self.fd, iovec[idx], iovcnt)
@@ -323,22 +326,24 @@ function io_mt.__index.send(self, ...)
 					iovcnt = iovcnt - 1
 					if len == 0 then break end
 				else
-					iovec[i].iov_base = ffi.cast("void*",
-						string.sub(iovec[i].iov_base, len + 1))
+					local str = string.sub(iovec[i].iov_base, len + 1)
+					table.insert(gc, str)
+					iovec[i].iov_base = ffi.cast("void*", str)
 					iovec[i].iov_len = iovec[i].iov_len - len
 					break
 				end
 			end
-			coroutine.yield(YIELD_IO, self.fd)
 		elseif errno == EAGAIN then
-			coroutine.yield(YIELD_IO, self.fd)
+			--epoll_ctl(g_epoll_fd, self.fd, EPOLL_CTL_MOD, EPOLLIN, EPOLLOUT, EPOLLOUT)
+			co_yield(YIELD_IO, self.fd)
+			--epoll_ctl(g_epoll_fd, self.fd, EPOLL_CTL_MOD, EPOLLIN, EPOLLOUT)
 		elseif errno ~= EINTR then
 			return false, ffi.string(ffi.C.strerror(errno))
 		end
 	end
 end
 
-local function socket_create(fd, ip, port)
+local function socket_create(fd, ip, port, gc)
 	return setmetatable({fd=fd, ip=ip, port=port}, io_mt)
 end
 
@@ -782,21 +787,107 @@ end
 
 --#--
 
-local g_yield_threads = {
-	[YIELD_IO]  = {},
-	[YIELD_IDLE] = {},
-}
+local co_wait_io_list = {}
+local co_idle_list = setmetatable({},{__mode="v"})
+local co_info = {}
 
 function co_resume(co, ...)
+	local cinfo = co_info[co]
+	assert(cinfo)
+
 	local r,flag,data = coroutine.resume(co, ...)
-	if r == true then
-		if flag == YIELD_IO then
-			if not g_yield_threads[YIELD_IO][data] then
-				g_yield_threads[YIELD_IO][data] = {}
+	if coroutine.status(co) == "dead" then
+		-- call gc first
+		local gc = cinfo.gc
+		if gc then gc() end
+
+		-- tell parent
+		local parent = cinfo.parent
+		if parent then
+			co_info[parent].childs[co] = nil
+			if cinfo.wait_by_parent then
+				co_resume(parent,r,flag,data)
+			else
+				co_info[parent].exit_childs[co] = {r,flag,data}
 			end
-			table.insert(g_yield_threads[YIELD_IO][data], co)
-		elseif flag == YIELD_IDLE then
-			table.insert(g_yield_threads[YIELD_IDLE], co)
+		end
+
+		-- kill all active childs
+		for child_co,_ in pairs(cinfo.childs) do
+			co_info[child_co] = nil
+		end
+
+		co_info[co] = nil
+	end
+
+	return r,flag,data
+end
+
+function co_yield(flag, fd, ...)
+	if not flag then flag = YIELD_IDLE end
+
+	local co = coroutine.running()
+	assert(co)
+
+	if flag == YIELD_IO then
+		if not co_wait_io_list[fd] then
+			co_wait_io_list[fd] = setmetatable({},{__mode="v"})
+		end
+		table.insert(co_wait_io_list[fd], co)
+	elseif flag == YIELD_IDLE then
+		table.insert(co_idle_list, co)
+	end
+
+	return coroutine.yield(flag, fd, ...)
+end
+
+function co_spawn(fn, gc)
+	local parent = coroutine.running()
+	local co = coroutine.create(fn)
+	co_info[co] = {parent=parent, gc=gc, childs={}, exit_childs={}}
+	if parent then co_info[parent].childs[co] = 1 end
+	co_resume(co)
+	return co
+end
+
+function co_kill(co)
+	if co_info[co] then
+		local parent = coroutine.running()
+		if co_info[co].parent ~= parent then
+			return nil,'not direct child'
+		end
+		-- kill all active childs
+		for child_co,_ in pairs(cinfo.childs) do
+			co_info[child_co] = nil
+		end
+		co_info[co] = nil
+	end
+	return true
+end
+
+function co_wait(...)
+	local parent = coroutine.running()
+	assert(parent)
+	local n = select('#',...)
+	for i=1,n do
+		local co = select(i,...)
+		local d = co_info[parent].exit_childs[co]
+		if d then
+			co_info[parent].exit_childs[co] = nil
+			return unpack(d)
+		elseif not co_info[co] then
+			return nil,'#' .. i .. ': ' .. co .. ' not exist'
+		end
+	end
+	for i=1,n do
+		local co = select(i,...)
+		co_info[co].wait_by_parent = true
+	end
+	local co,r,flag,data = co_yield(YIELD_WAIT)
+	for i=1,n do
+		local co = select(i,...)
+		if co_info[co] then
+			co_info[co].wait_by_parent = false
 		end
 	end
 	return r,flag,data
@@ -831,7 +922,6 @@ for i=1,child_n do
 	if pid == 0 then
 		print("child pid=" .. ffi.C.getpid() .. " enter")
 
-		local handlers = {}
 		local connections = 0
 		ffi.C.close(master_epoll_fd)
 		ffi.C.close(xfd)
@@ -866,73 +956,65 @@ for i=1,child_n do
 
 			-- wakeup idle threads
 			local wait_timeout = -1
-			local idle_threads = g_yield_threads[YIELD_IDLE]
-			for i=1,#idle_threads do
-				co_resume(idle_threads[i])
+			for i=1,#co_idle_list do
+				co_resume(co_idle_list[1])
+				table.remove(co_idle_list,1)
 			end
-			if #idle_threads > 0 then wait_timeout = 0 end
+			if #co_idle_list > 0 then wait_timeout = 0 end
 
 			print("child pid=" .. ffi.C.getpid() .. " epoll_wait enter...")
 			local nevents = ffi.C.epoll_wait(g_epoll_fd, ev_set, MAX_EPOLL_EVENT, wait_timeout)
 			print("child pid=" .. ffi.C.getpid() .. " epoll_wait exit...")
 
 			for ev_idx=0,nevents-1 do
-				if g_listen_sk_tbl[ev_set[ev_idx].data.fd] then
+				local fd = ev_set[ev_idx].data.fd
+				if g_listen_sk_tbl[fd] then
 					print("child pid=" .. ffi.C.getpid() .. " accept enter...")
-					local cfd,ip,port = accept(ev_set[ev_idx].data.fd)
+					local cfd,ip,port = accept(fd)
 					print("child pid=" .. ffi.C.getpid() .. " accept exit...")
 					if cfd > 0 then
-						set_nonblock(cfd)
 						print("child pid=" .. ffi.C.getpid() .. " get new connection, cfd=" .. cfd .. ", port=" .. port)
-						local sock = socket_create(cfd, ip, port)
-						sock.listen = g_listen_sk_tbl[ev_set[ev_idx].data.fd].listen
-						local co = coroutine.create(function()
-							local r1,r2 = pcall(function() return http_request_handler(sock) end)
-							if r1 == false then print(r2) os.exit(1) end
-							return r2
-						end)
-
-						local ret,flag = co_resume(co)
-						if (ret == false or flag == YIELD_EXIT) then
-							print("child pid=" .. ffi.C.getpid() .. " * remove connection, cfd=" .. fd)
-							ffi.C.close(ev_set[ev_idx].data.fd)
-						else
-							handlers[cfd] = co
-							epoll_ctl(g_epoll_fd, cfd, EPOLL_CTL_ADD, EPOLLIN, EPOLLET)
-							connections = connections + 1
-							if connections >= MAX_CONN_PER_PROC then
-								print("child pid=" .. ffi.C.getpid() .. " unlisten sk")
-								do_all_listen_sk(function(sk) epoll_ctl(g_epoll_fd, sk, EPOLL_CTL_DEL) end)
-								wait_listen_sk = false
-							end
+						set_nonblock(cfd)
+						epoll_ctl(g_epoll_fd, cfd, EPOLL_CTL_ADD, EPOLLIN, EPOLLET)
+						connections = connections + 1
+						if connections >= MAX_CONN_PER_PROC then
+							print("child pid=" .. ffi.C.getpid() .. " unlisten sk")
+							do_all_listen_sk(function(sk) epoll_ctl(g_epoll_fd, sk, EPOLL_CTL_DEL) end)
+							wait_listen_sk = false
 						end
+
+						local sock = socket_create(cfd, ip, port)
+						sock.listen = g_listen_sk_tbl[fd].listen
+						co_spawn(
+							function()
+								local r1,r2 = pcall(function() return http_request_handler(sock) end)
+								if r1 == false then print(r2); os.exit(1) end
+								return r2
+							end,
+							function()
+								print("child pid=" .. ffi.C.getpid() .. " remove connection, cfd=" .. cfd)
+								ffi.C.close(cfd)
+								connections = connections - 1
+							end
+						)
 					else
 						print("child pid=" .. ffi.C.getpid() .. " accept error, ignore")
 					end
-				elseif ev_set[ev_idx].data.fd == timer_fd then
+				elseif fd == timer_fd then
 					print("child pid=" .. ffi.C.getpid() .. " timer fired")
 					timerfd_settime(timer_fd, 0, 0)
 					timer_fd_fired = true
-				elseif ev_set[ev_idx].data.fd == efd then
+				elseif fd == efd then
 					local v = ffi.new("eventfd_t[1]")
 					ffi.C.eventfd_read(efd, v)
 					v = tonumber(v[0])
 					print("child pid=" .. ffi.C.getpid() .. " event fd fired, v=" .. v)
 				else
-					local fd = ev_set[ev_idx].data.fd
-					local handler = handlers[fd]
-					local co_tbl = g_yield_threads[YIELD_IO][fd]
-					if co_tbl then
-						for i=1,#co_tbl do
-							local co = co_tbl[1]
-							local ret,flag = co_resume(co)
-							if (ret == false or flag == YIELD_EXIT) and co == handler then
-								print("child pid=" .. ffi.C.getpid() .. " remove connection, cfd=" .. fd)
-								handlers[fd] = nil
-								ffi.C.close(ev_set[ev_idx].data.fd)
-								connections = connections - 1
-							end
-							table.remove(co_tbl,i)
+					local co_list = co_wait_io_list[fd]
+					if co_list then
+						for i=1,#co_list do
+							co_resume(co_list[1])
+							table.remove(co_list,1)
 						end
 					end
 				end
