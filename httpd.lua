@@ -97,6 +97,9 @@ int sigaddset(sigset_t *set, int signum);
 int sigdelset(sigset_t *set, int signum);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 
+typedef void (*sighandler_t)(int);
+sighandler_t signal(int signum, sighandler_t handler);
+
 unsigned int sleep(unsigned int seconds);
 int close(int fd);
 int ioctl(int d, int request, ...);
@@ -191,12 +194,15 @@ TCP_CORK=3
 
 CLOCK_MONOTONIC_RAW=4
 
+SIG_IGN=1
+SIG_ERR=-1
+SIGPIPE=13
+
 -- coroutine yield flag
 YIELD_IO = 1
 YIELD_SLEEP = 2
 YIELD_IDLE = 3
-YIELD_EXIT = 4
-YIELD_WAIT = 5
+YIELD_WAIT = 4
 
 function bind(fd, ip, port)
    local addr = ffi.new("struct sockaddr_in")
@@ -720,7 +726,6 @@ local function http_request_handler(sock)
 			break
 		end
 	end
-	return YIELD_EXIT
 end
 
 function do_all_listen_sk(f)
@@ -954,6 +959,8 @@ ffi.C.sigaddset(mask, SIGCHLD)
 ffi.C.sigprocmask(SIG_BLOCK, mask, NULL)
 local xfd = ffi.C.signalfd(-1, mask, 0)
 
+ffi.C.signal(SIGPIPE, ffi.cast("sighandler_t",SIG_IGN))
+
 local master_epoll_fd = ffi.C.epoll_create(20000)
 epoll_ctl(master_epoll_fd, xfd, EPOLL_CTL_ADD, EPOLLIN)
 
@@ -1049,8 +1056,8 @@ for i=1,child_n do
 					print("child pid=" .. ffi.C.getpid() .. " event fd fired, v=" .. v)
 				else
 					if bit.band(ev_set[ev_idx].events, EPOLLRDHUP) ~= 0 then
-						print("EPOLLRDHUP happens, close fd=" .. fd)
-						ffi.C.close(fd)
+						print("EPOLLRDHUP happens, EPOLL_CTL_DEL fd=" .. fd)
+						epoll_ctl(g_epoll_fd, fd, EPOLL_CTL_DEL)
 					end
 
 					local co_list = co_wait_io_list[fd]
