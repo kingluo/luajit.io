@@ -254,7 +254,16 @@ local READ_LEN = 3
 local io_mt = {__index = {}}
 local MAX_RBUF_LEN = 4096
 
+function io_mt.__index.close(self)
+	if not self.closed then
+		ffi.C.close(self.fd)
+		self.closed = true
+	end
+end
+
 function io_mt.__index.receive(self, pattern)
+	if self.closed then return nil, 'fd closed' end
+
 	if not self.rbuf_c then self.rbuf_c = ffi.new("char[?]", MAX_RBUF_LEN) end
 	if not self.rbuf then self.rbuf = "" end
 	local mode
@@ -306,6 +315,8 @@ function io_mt.__index.receive(self, pattern)
 end
 
 function io_mt.__index.send(self, ...)
+	if self.closed then return nil, 'fd closed' end
+
 	if not self.iovec then
 		self.iovec = ffi.new("struct iovec[?]", 64)
 	end
@@ -1036,7 +1047,7 @@ for i=1,child_n do
 							end,
 							function()
 								print("child pid=" .. ffi.C.getpid() .. " remove connection, cfd=" .. cfd)
-								ffi.C.close(cfd)
+								sock:close()
 								connections = connections - 1
 							end
 						)
