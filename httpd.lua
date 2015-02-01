@@ -134,6 +134,8 @@ struct timespec {
    long   tv_nsec;               /* Nanoseconds */
 };
 
+int clock_gettime(int clk_id, struct timespec *tp);
+
 struct itimerspec {
    struct timespec it_interval;  /* Interval for periodic timer */
    struct timespec it_value;     /* Initial expiration */
@@ -186,6 +188,8 @@ EINTR = 4
 
 IPPROTO_TCP=6
 TCP_CORK=3
+
+CLOCK_MONOTONIC_RAW=4
 
 -- coroutine yield flag
 YIELD_IO = 1
@@ -727,91 +731,89 @@ end
 
 --#--
 
+local rt = ffi.load("rt")
 local g_timers = {}
 local timer_mt = {
 	__index = {
 		cancel = function(self)
-			self.timeout = -1
+			self.canceled = true
 		end
 	}
 }
 
-local need_to_set_timerfd = false
+function timer_lt(a,b)
+	if a.tv_sec < b.tv_sec then return true end
+	if a.tv_sec == b.tv_sec and a.tv_nsec < b.tv_nsec then
+		return true
+	end
+	return false
+end
 
-function add_timer(fn, sec, msec)
-	sec = sec or 0
-	msec = msec or 0
-	local tv = ffi.new("struct timeval")
-	assert(ffi.C.gettimeofday(tv, nil) == 0)
+function add_timer(fn, sec)
+	assert(sec > 0)
+	local nsec = (sec%1) * 1000 * 1000 * 1000
+	sec = math.floor(sec)
+
+	local tv = ffi.new("struct timespec")
+	assert(rt.clock_gettime(CLOCK_MONOTONIC_RAW, tv) == 0)
 	local timer = setmetatable({
-		sec=tv.tv_sec+sec,
-		msec=tv.tv_usec/1000 + msec,
-		timeout=(tv.tv_sec+sec)*1000 + tv.tv_usec/1000 + msec,
-		fn=fn
+		tv_sec = tv.tv_sec + sec,
+		tv_nsec = tv.tv_nsec + nsec,
+		fn = fn
 	}, timer_mt)
 
-	local t = g_timers[1]
-	if t then
-		if (sec < t.sec) or (sec == t.sec and msec < t.msec) then
-			need_to_set_timerfd = true
-		end
-	else
-		need_to_set_timerfd = true
+	table.insert(g_timers, timer)
+	table.sort(g_timers, timer_lt)
+
+	if g_timers[1] == timer then
+		timerfd_settime(g_timer_fd, sec, nsec)
 	end
 
-	table.insert(g_timers, timer)
-	table.sort(g_timers, function(a, b)
-		return a.timeout < b.timeout
-	end)
 	return timer
 end
 
 local function process_all_timers()
 	local ntimer = #g_timers
-	if ntimer == 0 then return nil end
+	if ntimer == 0 then return 0 end
 
-	local tv = ffi.new("struct timeval")
-	assert(ffi.C.gettimeofday(tv, nil) == 0)
-	local now = tv.tv_sec*1000 + tv.tv_usec/1000
+	local tv = ffi.new("struct timespec")
+	assert(rt.clock_gettime(CLOCK_MONOTONIC_RAW, tv) == 0)
+	local timers = {}
+
 	for i=1,ntimer do
 		local t = g_timers[1]
-		if t.timeout < now then
-			if t.timeout ~= -1 then
-				t.fn()
-			end
-			table.remove(g_timers,1)
+		if timer_lt(t, tv) then
+			if not t.canceled then table.insert(timers, t) end
+			table.remove(g_timers, 1)
 		else
 			break
 		end
 	end
+
+	for _,t in ipairs(timers) do
+		t.fn()
+	end
+
+	return #timers
 end
 
 local function get_next_interval()
-	local ntimer = #g_timers
-	if ntimer == 0 then return nil end
-
-	local tv = ffi.new("struct timeval")
-	assert(ffi.C.gettimeofday(tv, nil) == 0)
 	local t = g_timers[1]
+	if not t then return nil end
 
-	-- the first item is older then now
-	-- the timerfd not triggered yet?
-	if (tv.tv_sec > t.sec) or
-		(tv.tv_sec == t.sec and tv.tv_usec/1000 > t.msec) then
-		assert(need_to_set_timerfd == false)
-		return nil
-	end
+	local tv = ffi.new("struct timespec")
+	assert(rt.clock_gettime(CLOCK_MONOTONIC_RAW, tv) == 0)
+	assert(timer_lt(tv, t))
 
-	local sec = t.sec - tv.tv_sec
-	local msec = tv.tv_usec/1000
-	if  msec > t.msec then
+	local sec = t.tv_sec - tv.tv_sec
+	if  tv.tv_nsec > t.tv_nsec then
 		sec = sec - 1
-		msec = t.msec + 1000 - msec
+		nsec = t.tv_nsec + 1000*1000*1000 - tv.tv_nsec
 	else
-		msec = t.msec - msec
+		nsec = t.tv_nsec - tv.tv_nsec
 	end
-	assert(sec >= 0 and msec >= 0)
-	return sec, msec * 1000 * 1000
+
+	return sec, nsec
 end
 
 --#--
@@ -820,10 +822,10 @@ local co_wait_io_list = {}
 local co_idle_list = setmetatable({},{__mode="v"})
 local co_info = {}
 
-function co_sleep(sec, msec)
+function co_sleep(sec)
 	local co = coroutine.running()
 	assert(co)
-	add_timer(function() co_resume(co) end, sec, msec)
+	add_timer(function() co_resume(co) end, sec)
 	co_yield(YIELD_SLEEP)
 end
 
@@ -976,7 +978,7 @@ for i=1,child_n do
 		epoll_ctl(g_epoll_fd, efd, EPOLL_CTL_ADD, EPOLLIN, EPOLLET)
 
 		-- add timer fd
-		local g_timer_fd = ffi.C.timerfd_create(CLOCK_MONOTONIC, 0)
+		g_timer_fd = ffi.C.timerfd_create(CLOCK_MONOTONIC, 0)
 		assert(g_timer_fd > 0)
 		epoll_ctl(g_epoll_fd, g_timer_fd, EPOLL_CTL_ADD, EPOLLIN)
 
@@ -986,15 +988,6 @@ for i=1,child_n do
 				print("child pid=" .. ffi.C.getpid() .. " listen sk")
 				do_all_listen_sk(function(sk) epoll_ctl(g_epoll_fd, sk, EPOLL_CTL_ADD, EPOLLIN) end)
 				wait_listen_sk = true
-			end
-
-			-- set timer fd
-			if need_to_set_timerfd then
-				local sec, nsec = get_next_interval()
-				if sec then
-					timerfd_settime(g_timer_fd, sec, nsec)
-					need_to_set_timerfd = false
-				end
 			end
 
 			-- wakeup idle threads
@@ -1045,9 +1038,10 @@ for i=1,child_n do
 					end
 				elseif fd == g_timer_fd then
 					print("child pid=" .. ffi.C.getpid() .. " timer fired")
-					process_all_timers()
 					timerfd_settime(g_timer_fd, 0, 0)
-					need_to_set_timerfd = true
+					while process_all_timers() > 0 do end
+					local sec,nsec = get_next_interval()
+					if sec then timerfd_settime(g_timer_fd, sec, nsec) end
 				elseif fd == efd then
 					local v = ffi.new("eventfd_t[1]")
 					ffi.C.eventfd_read(efd, v)
