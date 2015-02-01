@@ -166,6 +166,7 @@ EPOLLOUT=0x4
 EPOLLERR=0x8
 EPOLLHUP=0x10
 EPOLLET=0x8000
+EPOLLRDHUP = 0x2000
 
 AF_INET=2
 SOCKET_STREAM=1
@@ -334,9 +335,9 @@ function io_mt.__index.send(self, ...)
 				end
 			end
 		elseif errno == EAGAIN then
-			--epoll_ctl(g_epoll_fd, self.fd, EPOLL_CTL_MOD, EPOLLIN, EPOLLOUT, EPOLLOUT)
+			epoll_ctl(g_epoll_fd, self.fd, EPOLL_CTL_MOD, EPOLLET, EPOLLRDHUP, EPOLLIN, EPOLLOUT)
 			co_yield(YIELD_IO, self.fd)
-			--epoll_ctl(g_epoll_fd, self.fd, EPOLL_CTL_MOD, EPOLLIN, EPOLLOUT)
+			epoll_ctl(g_epoll_fd, self.fd, EPOLL_CTL_MOD, EPOLLET, EPOLLRDHUP, EPOLLIN)
 		elseif errno ~= EINTR then
 			return false, ffi.string(ffi.C.strerror(errno))
 		end
@@ -735,6 +736,8 @@ local timer_mt = {
 	}
 }
 
+local need_to_set_timerfd = false
+
 function add_timer(fn, sec, msec)
 	sec = sec or 0
 	msec = msec or 0
@@ -746,6 +749,16 @@ function add_timer(fn, sec, msec)
 		timeout=(tv.tv_sec+sec)*1000 + tv.tv_usec/1000 + msec,
 		fn=fn
 	}, timer_mt)
+
+	local t = g_timers[1]
+	if t then
+		if (sec < t.sec) or (sec == t.sec and msec < t.msec) then
+			need_to_set_timerfd = true
+		end
+	else
+		need_to_set_timerfd = true
+	end
+
 	table.insert(g_timers, timer)
 	table.sort(g_timers, function(a, b)
 		return a.timeout < b.timeout
@@ -780,6 +793,15 @@ local function get_next_interval()
 	local tv = ffi.new("struct timeval")
 	assert(ffi.C.gettimeofday(tv, nil) == 0)
 	local t = g_timers[1]
+
+	-- the first item is older then now
+	-- the timerfd not triggered yet?
+	if (tv.tv_sec > t.sec) or
+		(tv.tv_sec == t.sec and tv.tv_usec/1000 > t.msec) then
+		assert(need_to_set_timerfd == false)
+		return nil
+	end
+
 	local sec = t.sec - tv.tv_sec
 	local msec = tv.tv_usec/1000
 	if  msec > t.msec then
@@ -805,10 +827,26 @@ function co_sleep(sec, msec)
 	co_yield(YIELD_SLEEP)
 end
 
+function co_kill(co, parent)
+	if co_info[co] then
+		parent = parent or coroutine.running()
+		if co_info[co].parent ~= parent then
+			return false,'not direct child'
+		end
+
+		for child_co,_ in pairs(co_info[co].childs) do
+			co_kill(child_co, co)
+		end
+
+		co_info[co] = nil
+	end
+	return true
+end
+
 function co_resume(co, ...)
 	local cinfo = co_info[co]
 	if not cinfo then
-		print"coroutine already killed, no problem?"
+		print"coroutine already killed"
 		return false,"coroutine already killed"
 	end
 
@@ -831,7 +869,7 @@ function co_resume(co, ...)
 
 		-- kill all active childs
 		for child_co,_ in pairs(cinfo.childs) do
-			co_info[child_co] = nil
+			co_kill(child_co)
 		end
 
 		co_info[co] = nil
@@ -861,25 +899,12 @@ end
 function co_spawn(fn, gc)
 	local parent = coroutine.running()
 	local co = coroutine.create(fn)
-	co_info[co] = {parent=parent, gc=gc, childs={}, exit_childs={}}
+	co_info[co] = {parent=parent, gc=gc,
+		childs=setmetatable({},{__mode="k"}),
+		exit_childs=setmetatable({},{__mode="k"})}
 	if parent then co_info[parent].childs[co] = 1 end
 	co_resume(co)
 	return co
-end
-
-function co_kill(co)
-	if co_info[co] then
-		local parent = coroutine.running()
-		if co_info[co].parent ~= parent then
-			return nil,'not direct child'
-		end
-		-- kill all active childs
-		for child_co,_ in pairs(cinfo.childs) do
-			co_info[child_co] = nil
-		end
-		co_info[co] = nil
-	end
-	return true
 end
 
 function co_wait(...)
@@ -893,14 +918,16 @@ function co_wait(...)
 			co_info[parent].exit_childs[co] = nil
 			return unpack(d)
 		elseif not co_info[co] then
-			return nil,'#' .. i .. ': ' .. co .. ' not exist'
+			return false,'#' .. i .. ': ' .. tostring(co) .. ' not exist'
+		elseif co_info[co].parent ~= parent then
+			return false,'#' .. i .. ': ' .. tostring(co) .. ' not your child'
 		end
 	end
 	for i=1,n do
 		local co = select(i,...)
 		co_info[co].wait_by_parent = true
 	end
-	local co,r,flag,data = co_yield(YIELD_WAIT)
+	local r,flag,data = co_yield(YIELD_WAIT)
 	for i=1,n do
 		local co = select(i,...)
 		if co_info[co] then
@@ -949,7 +976,6 @@ for i=1,child_n do
 		epoll_ctl(g_epoll_fd, efd, EPOLL_CTL_ADD, EPOLLIN, EPOLLET)
 
 		-- add timer fd
-		local g_timer_set = false
 		local g_timer_fd = ffi.C.timerfd_create(CLOCK_MONOTONIC, 0)
 		assert(g_timer_fd > 0)
 		epoll_ctl(g_epoll_fd, g_timer_fd, EPOLL_CTL_ADD, EPOLLIN)
@@ -963,11 +989,11 @@ for i=1,child_n do
 			end
 
 			-- set timer fd
-			if g_timer_set == false then
+			if need_to_set_timerfd then
 				local sec, nsec = get_next_interval()
 				if sec then
-					g_timer_set = true
 					timerfd_settime(g_timer_fd, sec, nsec)
+					need_to_set_timerfd = false
 				end
 			end
 
@@ -992,7 +1018,7 @@ for i=1,child_n do
 					if cfd > 0 then
 						print("child pid=" .. ffi.C.getpid() .. " get new connection, cfd=" .. cfd .. ", port=" .. port)
 						set_nonblock(cfd)
-						epoll_ctl(g_epoll_fd, cfd, EPOLL_CTL_ADD, EPOLLIN, EPOLLET)
+						epoll_ctl(g_epoll_fd, cfd, EPOLL_CTL_ADD, EPOLLIN, EPOLLRDHUP, EPOLLET)
 						connections = connections + 1
 						if connections >= MAX_CONN_PER_PROC then
 							print("child pid=" .. ffi.C.getpid() .. " unlisten sk")
@@ -1021,13 +1047,18 @@ for i=1,child_n do
 					print("child pid=" .. ffi.C.getpid() .. " timer fired")
 					process_all_timers()
 					timerfd_settime(g_timer_fd, 0, 0)
-					g_timer_set = false
+					need_to_set_timerfd = true
 				elseif fd == efd then
 					local v = ffi.new("eventfd_t[1]")
 					ffi.C.eventfd_read(efd, v)
 					v = tonumber(v[0])
 					print("child pid=" .. ffi.C.getpid() .. " event fd fired, v=" .. v)
 				else
+					if bit.band(ev_set[ev_idx].events, EPOLLRDHUP) ~= 0 then
+						print("EPOLLRDHUP happens, close fd=" .. fd)
+						ffi.C.close(fd)
+					end
+
 					local co_list = co_wait_io_list[fd]
 					if co_list then
 						for i=1,#co_list do

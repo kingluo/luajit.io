@@ -2,9 +2,11 @@ package.path = package.path .. ';./modules/?.lua'
 package.cpath = package.cpath .. ';./modules/?.so'
 
 local function test_servlet(req, rsp, cf, extra)
-	local co1 = co_spawn(function() co_sleep(3); rsp:say("hello world, conf ok!\n") end)
+	local co1 = co_spawn(function() co_sleep(2); rsp:say("hello world, conf ok!\n") end)
 	local co2 = co_spawn(function() rsp:say("hello xxx, conf ok!\n") end)
-	--co_wait(co1); co_wait(co2)
+	co_sleep(0,200)
+	assert(co_wait(co1))
+	assert(co_wait(co2))
 	--return rsp:say("hello world, conf ok!\n")
 end
 
