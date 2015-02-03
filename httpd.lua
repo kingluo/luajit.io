@@ -638,7 +638,7 @@ local function do_servlet(req, rsp)
 				if h == host then
 					target_srv = srv
 					break
-				elseif h:find('~',1,true) then
+				elseif h:sub(1,1) == "~" then
 					if string.find(host, h:sub(2)) then
 						target_srv = srv
 						break
