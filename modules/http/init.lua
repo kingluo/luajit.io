@@ -21,8 +21,8 @@ struct tm {
    int tm_yday;        /* day in the year */
    int tm_isdst;       /* daylight saving time */
 };
-struct tm *gmtime(const time_t *timep);
-struct tm *localtime(const time_t *timep);
+struct tm *gmtime_r(const time_t *timep, struct tm *result);
+size_t strftime(char *s, size_t max, const char *format, const struct tm *tm);
 
 struct timeval {
 	time_t      tv_sec;     /* seconds */
@@ -33,7 +33,6 @@ struct timezone {
 	int tz_dsttime;         /* type of DST correction */
 };
 int gettimeofday(struct timeval *tv, struct timezone *tz);
-size_t strftime(char *s, size_t max, const char *format, const struct tm *tm);
 ]]
 
 local function unescape(s)
@@ -211,6 +210,17 @@ local status_tbl = {
 
 local http_rsp_mt = {__index={}}
 
+local v_time_t = ffi.new("time_t[1]")
+local date_buf = ffi.new("char[?]", 200)
+local tm = ffi.new("struct tm[1]")
+local function http_time()
+	assert(ffi.C.time(v_time_t) > 0)
+	assert(ffi.C.gmtime_r(v_time_t, tm))
+	local len = ffi.C.strftime(date_buf, 200, "%a, %d %h %G %H:%M:%S GMT", tm)
+	assert(len > 0)
+	return ffi.string(date_buf, len)
+end
+
 function http_rsp_mt.__index.send_headers(self)
 	if not self.__priv.headers_sent then
 		local sk = self.sock
@@ -226,8 +236,9 @@ function http_rsp_mt.__index.send_headers(self)
 			self.headers["content-type"] = "text/plain; charset=utf-8"
 		end
 
-		self.headers["server"] = "Lua-Httpd"
-		self.headers["date"] = "Thu, 29 Jan 2015 04:56:53 GMT"
+		self.headers["server"] = "luajit.io"
+
+		self.headers["date"] = http_time()
 		self.headers["cache-control"] = "no-cache, private"
 		self.headers["connection"] = "Keep-Alive"
 
