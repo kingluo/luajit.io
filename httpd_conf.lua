@@ -1,23 +1,19 @@
-package.path = package.path .. ';./modules/?.lua'
+package.path = package.path .. ';./modules/?.lua;./modules/?/init.lua'
 package.cpath = package.cpath .. ';./modules/?.so'
 
-local function test_servlet(req, rsp, cf, extra)
-	local co1 = co_spawn(function() co_yield(); co_sleep(2); rsp:say("hello world, conf ok!\n") end)
-	local co2 = co_spawn(function() rsp:say("hello xxx, conf ok!\n") end)
-	co_sleep(0.2)
-	assert(co_wait(co1))
-	assert(co_wait(co2))
-	--return rsp:say("hello world, conf ok!\n")
-end
+local http = require("http")
+local co = require("core.co_mod")
 
-http_conf {
+http {
+	worker_processes = 1,
+	worker_connections = 2,
 	-- server blocks
 	{
-		listen = "192.168.8.30:8080",
+		listen = "*:8080",
 		-- if host prefixed by "~", denotes regular pattern matching
 		-- otherwise, do exact compare
 		host = {"example.com", "~.*%.example%.com"},
-		root = ".",
+		root = "/srv/luajit.io/",
 		default_type = 'text/plain',
 		servlet = {
 			-- same match rule as Nginx location directive
@@ -26,7 +22,7 @@ http_conf {
 			-- "^" explicitly denotes longest prefix matching
 			-- "f" denotes matching function
 			-- {<Nginx-style modifier> (<url match pattern>|<match function>), (<module name>|<servlet function>)}, [<extra>]
-			{"=", "/test", test_servlet},
+			{"=", "/test2", "test_mod"},
 			{"^", "/foobar", "foobar_mod"},
 			{"~", "%.lux$", "lux_mod"},
 			{"^~", "/files/", "static_mod"},
@@ -35,15 +31,22 @@ http_conf {
 				function(req)
 					return true
 				end,
-				test_servlet,
+				function(req, rsp, cf, extra)
+					local co1 = co.spawn(function() co.yield(); co.sleep(2); rsp:say("hello world, conf ok!\n") end)
+					local co2 = co.spawn(function() rsp:say("hello xxx, conf ok!\n") end)
+					co.sleep(0.2)
+					assert(co.wait(co1))
+					assert(co.wait(co2))
+					--return rsp:say("hello world, conf ok!\n")
+				end,
 				{foo=1,bar="hello"}
 			},
 		}
 	},
 	{
-		listen = "192.168.8.30:8080; 127.0.0.1:8080; *:9090; 127.0.0.1:10000",
+		listen = "127.0.0.1:8080; *:9090; 127.0.0.1:10000",
 		host = {"example.net"},
-		root = "/srv/foobar",
+		root = "./foorbar",
 		default_type = 'text/plain',
 		servlet = {
 			{"^", "/static/files/", "static_mod"}
