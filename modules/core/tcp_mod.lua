@@ -3,39 +3,10 @@ local ep = require("core.epoll_mod")
 local timer = require("core.timer_mod")
 local co = require("core.co_mod")
 local utils = require("core.utils_mod")
+local signal = require("core.signal_mod")
+require("socket.base")
 
 ffi.cdef[[
-struct in_addr {
-	unsigned int  s_addr;
-};
-struct sockaddr_in {
-  short int  sin_family;	 /* Address family			   */
-  unsigned short int				sin_port;	   /* Port number				  */
-  struct in_addr		sin_addr;	   /* Internet address			 */
-
-  /* Pad to size of `struct sockaddr'. */
-  unsigned char		 __pad[16 - sizeof(short int) -
-						sizeof(unsigned short int) - sizeof(struct in_addr)];
-};
-struct sockaddr {
-	short int sa_family;
-	char sa_data[14];
-};
-short int ntohs(short int netshort);
-short int htons(short int hostshort);
-int inet_aton(const char *cp, struct in_addr *inp);
-char *inet_ntoa(struct in_addr in);
-
-extern int socket(int domain, int type, int protocol);
-extern int bind(int sockfd, const struct sockaddr *addr,
-		unsigned int addrlen);
-extern int connect(int sockfd, const struct sockaddr *addr,
-		   unsigned int addrlen);
-extern int listen(int sockfd, int backlog);
-extern int accept(int sockfd, struct sockaddr *addr, unsigned int *addrlen);
-
-extern int setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen);
-
 typedef int ssize_t;
 typedef unsigned int size_t;
 extern ssize_t read(int fd, void *buf, size_t count);
@@ -50,43 +21,6 @@ ssize_t writev(int fd, const struct iovec *iov, int iovcnt);
 int fork(void);
 int getpid(void);
 
-typedef struct {
-	unsigned long int __val[1024 / (8 * sizeof (unsigned long int))];
-} sigset_t;
-int signalfd(int fd, const sigset_t *mask, int flags);
-
-typedef unsigned int uint32_t;
-typedef int int32_t;
-typedef unsigned long long uint64_t;
-typedef long long int64_t;
-typedef unsigned char uint8_t;
-struct signalfd_siginfo {
-	uint32_t ssi_signo;
-	int32_t ssi_errno;
-	int32_t ssi_code;
-	uint32_t ssi_pid;
-	uint32_t ssi_uid;
-	int32_t ssi_fd;
-	uint32_t ssi_tid;
-	uint32_t ssi_band;
-	uint32_t ssi_overrun;
-	uint32_t ssi_trapno;
-	int32_t ssi_status;
-	int32_t ssi_int;
-	uint64_t ssi_ptr;
-	uint64_t ssi_utime;
-	uint64_t ssi_stime;
-	uint64_t ssi_addr;
-	uint8_t __pad[48];
-};
-int sigemptyset(sigset_t *set);
-int sigaddset(sigset_t *set, int signum);
-int sigdelset(sigset_t *set, int signum);
-int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
-
-typedef void (*sighandler_t)(int);
-sighandler_t signal(int signum, sighandler_t handler);
-
 int close(int fd);
 int ioctl(int d, int request, ...);
 ]]
@@ -98,9 +32,6 @@ local SO_REUSEADDR=2
 local IPPROTO_TCP=6
 
 local SIGCHLD=17
-local SIG_BLOCK=0
-local SIG_IGN=1
-local SIG_ERR=-1
 local SIGPIPE=13
 
 local EAGAIN = 11
@@ -255,7 +186,7 @@ function tcp_mt.__index.receive(self, pattern)
 	self.reading = true
 
 	self.rtimedout = false
-	if self.timeout > 0 then
+	if self.timeout and self.timeout > 0 then
 		local cur_co = coroutine.running()
 		assert(cur_co)
 		self.rtimer = timer.add_timer(function()
@@ -338,7 +269,7 @@ function tcp_mt.__index.send(self, ...)
 	if self.closed then return nil, 'fd closed' end
 
 	self.wtimedout = false
-	if self.timeout > 0 then
+	if self.timeout and self.timeout > 0 then
 		local cur_co = coroutine.running()
 		assert(cur_co)
 		self.wtimer = timer.add_timer(function()
@@ -450,21 +381,21 @@ local function run(cfg, overwrite_handler)
 	local conn_handler = overwrite_handler or tcp_handler
 	tcp_parse_conf(cfg)
 
-	-- block and capture SIGCHLD
-	local mask = ffi.new("sigset_t")
-	ffi.C.sigemptyset(mask)
-	ffi.C.sigaddset(mask, SIGCHLD)
-	ffi.C.sigprocmask(SIG_BLOCK, mask, NULL)
-	local xfd = ffi.C.signalfd(-1, mask, 0)
+	local worker_processes = g_tcp_cfg.worker_processes
+	local sigchld_handler = function(siginfo)
+		print ("> child exit with pid=" .. siginfo.ssi_pid .. ", status=" .. siginfo.ssi_status)
+		worker_processes = worker_processes - 1
+	end
+	signal.add_signal_handler(SIGCHLD, sigchld_handler)
 
 	-- avoid crash triggered by SIGPIPE
-	ffi.C.signal(SIGPIPE, ffi.cast("sighandler_t",SIG_IGN))
+	signal.ignore_signal(SIGPIPE)
 
-	for i=1,g_tcp_cfg.worker_processes do
+	for i=1,worker_processes do
 		local pid = ffi.C.fork()
 		if pid == 0 then
 			print("child pid=" .. ffi.C.getpid() .. " enter")
-			ffi.C.close(xfd)
+			signal.del_signal_handler(SIGCHLD, sigchld_handler)
 
 			local connections = 0
 			local wait_listen_sk = false
@@ -515,7 +446,8 @@ local function run(cfg, overwrite_handler)
 			end
 
 			-- init the event loop
-			ep.init(nil, function()
+			ep.init()
+			ep.add_prepare_hook(function()
 				-- listen all server sockets
 				if (not wait_listen_sk) and connections < g_tcp_cfg.worker_connections then
 					print("child pid=" .. ffi.C.getpid() .. " listen sk")
@@ -533,6 +465,9 @@ local function run(cfg, overwrite_handler)
 
 				return wait_timeout;
 			end)
+
+			-- init signal subsystem
+			signal.init()
 
 			-- init timer subsystem
 			timer.init()
@@ -552,21 +487,13 @@ local function run(cfg, overwrite_handler)
 	end
 
 	-- master event loop
-	local worker_processes = g_tcp_cfg.worker_processes
-	ep.init(nil, function()
+	ep.init()
+	ep.add_prepare_hook(function()
 		assert(worker_processes >= 0)
 		return -1, (worker_processes == 0)
 	end)
-
-	do_all_listen_sk(function(ssock) ssock:close() end)
+	signal.init()
 	print("> parent wait " .. worker_processes .. " child")
-	local signal_ev = {fd = xfd, handler = function()
-		local siginfo = ffi.new("struct signalfd_siginfo")
-		assert(ffi.C.read(xfd, siginfo, ffi.sizeof("struct signalfd_siginfo")) == ffi.sizeof("struct signalfd_siginfo"))
-		print ("> child exit with pid=" .. siginfo.ssi_pid .. ", status=" .. siginfo.ssi_status)
-		worker_processes = worker_processes - 1
-	end}
-	ep.add_event(signal_ev, ep.EPOLLIN)
 	ep.run()
 	print "> parent exit"
 	os.exit(0)

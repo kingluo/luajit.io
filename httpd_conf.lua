@@ -3,6 +3,7 @@ package.cpath = package.cpath .. ';./modules/?.so'
 
 local http = require("http")
 local co = require("core.co_mod")
+local dns = require("socket.dns_mod")
 
 http {
 	worker_processes = 1,
@@ -32,12 +33,15 @@ http {
 					return true
 				end,
 				function(req, rsp, cf, extra)
-					local co1 = co.spawn(function() co.yield(); co.sleep(2); rsp:say("hello world, conf ok!\n") end)
-					local co2 = co.spawn(function() rsp:say("hello xxx, conf ok!\n") end)
-					co.sleep(0.2)
-					assert(co.wait(co1))
-					assert(co.wait(co2))
-					--return rsp:say("hello world, conf ok!\n")
+					-- local co1 = co.spawn(function() co.yield(); co.sleep(2); rsp:say("hello world, conf ok!\n") end)
+					-- local co2 = co.spawn(function() rsp:say("hello xxx, conf ok!\n") end)
+					-- co.sleep(0.2)
+					-- assert(co.wait(co1))
+					-- assert(co.wait(co2))
+					--while true do
+					print(dns.resolve("debian", 80))
+					--end
+					return rsp:say("hello world, conf ok!\n")
 				end,
 				{foo=1,bar="hello"}
 			},

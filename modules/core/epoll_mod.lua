@@ -34,8 +34,9 @@ local EPOLLET=0x8000
 local EPOLLRDHUP=0x2000
 
 local g_epoll_fd
-local g_prepare_hook
+local g_prepare_hooks = {}
 local handlers = setmetatable({},{__mode="v"})
+local handlers = {}
 
 local ev_c = ffi.new("struct epoll_event")
 local MAX_EPOLL_EVENT = 128
@@ -71,19 +72,25 @@ local function del_event(ev, ...)
 	end
 end
 
-local function init(epoll_size, prepare_hook)
+local function init(epoll_size)
 	if not g_epoll_fd then
 		g_epoll_fd = ffi.C.epoll_create(epoll_size or 20000)
-		g_prepare_hook = prepare_hook
 	end
+end
+
+local function add_prepare_hook(hook)
+	table.insert(g_prepare_hooks, hook)
 end
 
 local function run(expect_events)
 	assert((expect_events == nil) or (expect_events > 0))
 	local n_events = 0
 	while true do
-		local wait_timeout,to_exit = g_prepare_hook()
-		if to_exit == true then return n_events end
+		local wait_timeout,to_exit
+		for _,hook in ipairs(g_prepare_hooks) do
+			wait_timeout,to_exit = hook()
+			if to_exit == true then return n_events end
+		end
 
 		print("child pid=" .. ffi.C.getpid() .. " epoll_wait enter...")
 		local nevents = ffi.C.epoll_wait(g_epoll_fd, ev_set, MAX_EPOLL_EVENT, wait_timeout)
@@ -105,6 +112,7 @@ return {
 	-- functions
 	add_event = add_event,
 	del_event = del_event,
+	add_prepare_hook = add_prepare_hook,
 	init = init,
 	run = run,
 	-- constants

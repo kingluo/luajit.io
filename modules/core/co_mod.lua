@@ -6,6 +6,7 @@ local YIELD_IO = 1
 local YIELD_SLEEP = 2
 local YIELD_IDLE = 3
 local YIELD_WAIT = 4
+local YIELD_DNS = 5
 
 local co_wait_io_list = {}
 local co_idle_list = setmetatable({},{__mode="v"})
@@ -144,4 +145,5 @@ return {
 	YIELD_SLEEP = YIELD_SLEEP,
 	YIELD_IDLE = YIELD_IDLE,
 	YIELD_WAIT = YIELD_WAIT,
+	YIELD_DNS = YIELD_DNS,
 }
