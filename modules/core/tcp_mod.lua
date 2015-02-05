@@ -109,11 +109,12 @@ local EINTR = 4
 local READ_ALL = 1
 local READ_LINE = 2
 local READ_LEN = 3
+local READ_UNTIL = 4
 
-local io_mt = {__index = {}}
+local tcp_mt = {__index = {}}
 local MAX_RBUF_LEN = 4096
 
-function io_mt.__index.close(self)
+function tcp_mt.__index.close(self)
 	if not self.closed then
 		ffi.C.close(self.fd)
 		self.guard.fd = -1
@@ -121,11 +122,14 @@ function io_mt.__index.close(self)
 	end
 end
 
-function io_mt.__index.receive(self, pattern)
-	if self.closed then return nil, 'fd closed' end
+function tcp_mt.__index.settimeout(sec)
+	self.timeout = sec
+end
 
+local function receive_ll(self, pattern, rlen, options)
 	if not self.rbuf_c then self.rbuf_c = ffi.new("char[?]", MAX_RBUF_LEN) end
 	if not self.rbuf then self.rbuf = "" end
+
 	local mode
 	if not pattern or pattern == '*l' then
 		mode = READ_LINE
@@ -133,10 +137,13 @@ function io_mt.__index.receive(self, pattern)
 		mode = READ_ALL
 	elseif type(pattern) == 'number' then
 		mode = READ_LEN
+	else
+		mode = READ_UNTIL
 	end
 
 	while true do
-		if self.rbuf ~= "" then
+		local rbuf_len = #self.rbuf
+		if rbuf_len > 0 then
 			if mode == READ_LINE then
 				local la,lb = string.find(self.rbuf, '\r\n')
 				if la then
@@ -144,39 +151,137 @@ function io_mt.__index.receive(self, pattern)
 					self.rbuf = string.sub(self.rbuf, lb+1)
 					return str
 				end
-			elseif mode == READ_LEN and #self.rbuf >= pattern then
-				local str = string.sub(self.rbuf, 1, pattern)
-				self.rbuf = string.sub(self.rbuf, pattern+1)
-				return str
+			elseif mode == READ_LEN then
+				if rbuf_len >= pattern then
+					local str = string.sub(self.rbuf, 1, pattern)
+					self.rbuf = string.sub(self.rbuf, pattern+1)
+					return str
+				end
+			elseif mode == READ_UNTIL then
+				local i,j
+				if not self.last_matched then
+					i,j = string.find(self.rbuf, pattern)
+					if i then self.last_matched = {i=i,j=j} end
+				else
+					i,j = self.last_matched.i, self.last_matched.j
+				end
+				if i then
+					if i == 1 then
+						if option.inclusive then
+							self.rbuf = string.sub(self.rbuf, j + 1)
+						end
+						self.last_matched = nil
+						return nil
+					end
+					if option.inclusive then i = j else i = i - 1 end
+					if rlen and rlen < i then i = rlen end
+					local str = string.sub(self.rbuf, 1, i)
+					self.rbuf = string.sub(self.rbuf, i + 1)
+					self.last_matched.i = self.last_matched.i - i
+					self.last_matched.j = self.last_matched.j - i
+					assert(self.last_matched.j >= 0)
+					if self.last_matched.j == 0 then
+						self.last_matched.i = 1
+					end
+					return str
+				elseif rlen and rlen <= rbuf_len then
+					local str = string.sub(self.rbuf, 1, rlen)
+					self.rbuf = string.sub(self.rbuf, rlen+1)
+					return str
+				end
 			end
 		end
 
-		local len = ffi.C.read(self.fd, self.rbuf_c, MAX_RBUF_LEN)
-		local errno = ffi.errno()
-		if len > 0 then
-			self.rbuf = self.rbuf .. ffi.string(self.rbuf_c, len)
-		elseif len == 0 then
-			-- for socket, means broken?
-			-- how about for fd of other types?
-			return nil, 'socket broken'
-		elseif errno == EAGAIN then
-			if self.rbuf ~= "" and mode == READ_ALL then
+		while true do
+			if self.rtimedout then
+				assert(self.last_matched == nil)
 				local str = self.rbuf
 				self.rbuf = ""
-				return str
-			else
-				local err = co.yield(co.YIELD_IO, self.fd)
-				if err then return nil,err end
+				return nil, "timeout", self.rbuf
 			end
-		elseif errno ~= EINTR then
-			return nil, utils.strerror()
+
+			local err
+			local len = ffi.C.read(self.fd, self.rbuf_c, MAX_RBUF_LEN)
+			local errno = ffi.errno()
+
+			if len > 0 then
+				self.rbuf = self.rbuf .. ffi.string(self.rbuf_c, len)
+				break
+			elseif len == 0 then
+				-- for socket, means closed by peer?
+				-- how about other types of fd?
+				self:close()
+				err = "socket closed"
+			elseif errno == EAGAIN then
+				co.yield(co.YIELD_IO, self.fd)
+			elseif errno ~= EINTR then
+				self:close()
+				err = utils.strerror(errno)
+			end
+
+			if err then
+				local rbuf_len = #self.rbuf
+				local str
+				if rbuf_len > 0 then
+					str = self.rbuf
+					self.rbuf = ""
+					if mode == READ_ALL then
+						return str
+					end
+				end
+				return nil, err, str
+			end
 		end
 	end
 end
 
-function io_mt.__index.send(self, ...)
-	if self.closed then return nil, 'fd closed' end
+local function wakeup_timedout(cur_co)
+	if coroutine.status(cur_co) == "suspended" then
+		local colist = co.wait_io_list[self.fd]
+		for i=1,#colist do
+			if colist[i] == cur_co then
+				table.remove(colist,i)
+				co.co_resume(cur_co)
+				break
+			end
+		end
+	end
+end
 
+function tcp_mt.__index.receive(self, pattern)
+	if self.closed then return nil, "socket closed" end
+
+	if self.reading then return nil,"socket busy reading" end
+	self.reading = true
+
+	self.rtimedout = false
+	if self.timeout > 0 then
+		local cur_co = coroutine.running()
+		assert(cur_co)
+		self.rtimer = timer.add_timer(function()
+			self.rtimedout = true
+			wakeup_timedout(cur_co)
+		end, self.timeout)
+	end
+
+	local r,err,partial = receive_ll(self, pattern)
+
+	if self.rtimer then
+		self.rtimer:cancel()
+		self.rtimer = nil
+	end
+
+	self.reading = false
+	return r,err,partial
+end
+
+function tcp_mt.__index.receiveutil(self, pattern, options)
+	return function(len)
+		return self:receive(pattern, len, options)
+	end
+end
+
+function send_ll(self, ...)
 	if not self.iovec then
 		self.iovec = ffi.new("struct iovec[?]", 64)
 	end
@@ -193,14 +298,17 @@ function io_mt.__index.send(self, ...)
 
 	local idx = 0
 	local gc = {}
+	local sent = 0
 	while true do
-		if total == 0 then return true end
+		if self.wtimedout then
+			return sent,"timeout"
+		end
 		local len = ffi.C.writev(self.fd, iovec[idx], iovcnt)
 		local errno = ffi.errno()
-		if len == total then
-			return true
+		if len > 0 then sent = sent + len end
+		if sent == total then
+			return sent
 		elseif len > 0 then
-			total = total - len
 			for i=idx,iovcnt-1 do
 				if iovec[i].io_len <= len then
 					len = len - iovec[i].io_len
@@ -220,13 +328,37 @@ function io_mt.__index.send(self, ...)
 			co.yield(co.YIELD_IO, self.fd)
 			ep.del_event(self.ev, ep.EPOLLOUT)
 		elseif errno ~= EINTR then
-			return false, utils.strerror()
+			self:close()
+			return nil, utils.strerror(errno)
 		end
 	end
 end
 
+function tcp_mt.__index.send(self, ...)
+	if self.closed then return nil, 'fd closed' end
+
+	self.wtimedout = false
+	if self.timeout > 0 then
+		local cur_co = coroutine.running()
+		assert(cur_co)
+		self.wtimer = timer.add_timer(function()
+			self.wtimedout = true
+			wakeup_timedout(cur_co)
+		end, self.timeout)
+	end
+
+	local sent,err = send_ll(self, ...)
+
+	if self.wtimer then
+		self.wtimer:cancel()
+		self.wtimer = nil
+	end
+
+	return sent,err
+end
+
 local function sock_new(fd, ip, port)
-	return setmetatable({fd=fd, ip=ip, port=port, ev={fd=fd}, guard=utils.fd_guard(fd)}, io_mt)
+	return setmetatable({fd=fd, ip=ip, port=port, ev={fd=fd}, guard=utils.fd_guard(fd)}, tcp_mt)
 end
 
 local function bind(ip, port, listen_size)
@@ -249,7 +381,7 @@ local function bind(ip, port, listen_size)
 	return sock
 end
 
-function io_mt.__index.accept(self)
+function tcp_mt.__index.accept(self)
 	local client_addr = ffi.new("struct sockaddr_in[1]")
 	local in_addr_len = ffi.new("unsigned int[1]")
 	local cfd = ffi.C.accept(self.fd, ffi.cast("struct sockaddr *",client_addr), in_addr_len)

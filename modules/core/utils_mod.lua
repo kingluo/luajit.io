@@ -32,8 +32,8 @@ local function import(m)
 	end
 end
 
-local function strerrno()
-	return ffi.string(ffi.C.strerror(ffi.C.errno))
+local function strerrno(errno)
+	return ffi.string(ffi.C.strerror(errno or ffi.errno()))
 end
 
 local function bin2hex(s)
