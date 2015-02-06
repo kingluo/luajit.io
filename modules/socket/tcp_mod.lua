@@ -393,9 +393,7 @@ local function tcp_parse_conf(cf)
 end
 
 local function tcp_handler(sock)
-	local target_srv
-	local host = req.headers["host"]
-	for _,srv in ipairs(g_http_cfg) do
+	for _,srv in ipairs(g_tcp_cfg) do
 		if string.find(srv.listen, sock.listen, 1, true) then
 			local handler = srv.handler
 			assert(handler)
@@ -407,7 +405,7 @@ local function tcp_handler(sock)
 			end
 		end
 	end
-	print "no handler"
+	error("no handler")
 end
 
 local function do_all_listen_sk(func)

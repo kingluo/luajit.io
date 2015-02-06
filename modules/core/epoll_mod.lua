@@ -39,35 +39,38 @@ local handlers = setmetatable({},{__mode="v"})
 
 local MAX_EPOLL_EVENT = 128
 local ev_set = ffi.new("struct epoll_event[?]", MAX_EPOLL_EVENT)
+local ev_c = ffi.new("struct epoll_event")
 
 local function add_event(ev, ...)
-	local fd = ev.fd
-	assert(fd)
-	if handlers[fd] ~= nil then print "NO NIL" end
-	handlers[fd] = ev
+	handlers[ev.fd] = ev
 	local cmd
-	if not ev.ev_c then
-		ev.ev_c = ffi.new("struct epoll_event")
-		ev.ev_c.data.fd = fd
+	if not ev.events then
+		ev.events = 0
 		cmd = EPOLL_CTL_ADD
 	else
 		cmd = EPOLL_CTL_MOD
 	end
-	ev.ev_c.events = bit.bor(ev.ev_c.events, ...)
-	assert(ffi.C.epoll_ctl(g_epoll_fd, cmd, fd, ev.ev_c) == 0)
+	if bit.band(ev.events, ...) == 0 then
+		ev_c.data.fd = ev.fd
+		ev_c.events = bit.bor(ev.events, ...)
+		ev.events = ev_c.events
+		assert(ffi.C.epoll_ctl(g_epoll_fd, cmd, ev.fd, ev_c) == 0)
+	end
 end
 
 local function del_event(ev, ...)
 	if not handlers[ev.fd] then return end
-	assert(ev.fd)
-	assert(ev.ev_c)
 	local n_event = select('#',...)
 	if n_event == 0 then
+		assert(handlers[ev.fd] == ev)
 		assert(ffi.C.epoll_ctl(g_epoll_fd, EPOLL_CTL_DEL, ev.fd, nil) == 0)
 		handlers[ev.fd] = nil
+		ev.events = nil
 	else
-		ev.ev_c.events = bit.band(ev.ev_c.events, bit.bnot(bit.bor(...)))
-		assert(ffi.C.epoll_ctl(g_epoll_fd, EPOLL_CTL_MOD, ev.fd, ev.ev_c) == 0)
+		ev_c.data.fd = ev.fd
+		ev_c.events = bit.band(ev.events, bit.bnot(bit.bor(...)))
+		ev.events = ev_c.events
+		assert(ffi.C.epoll_ctl(g_epoll_fd, EPOLL_CTL_MOD, ev.fd, ev_c) == 0)
 	end
 end
 
@@ -82,7 +85,7 @@ local function add_prepare_hook(hook)
 end
 
 local function run(expect_events)
-	assert((expect_events == nil) or (expect_events > 0))
+	assert((expect_events == nil) or (expect_events >= 0))
 	local n_events = 0
 	while true do
 		local wait_timeout,to_exit
@@ -91,18 +94,23 @@ local function run(expect_events)
 			if to_exit == true then return n_events end
 		end
 
-		print("child pid=" .. ffi.C.getpid() .. " epoll_wait enter...")
-		local nevents = ffi.C.epoll_wait(g_epoll_fd, ev_set, MAX_EPOLL_EVENT, wait_timeout)
-		print("child pid=" .. ffi.C.getpid() .. " epoll_wait exit...")
+		print("# pid=" .. ffi.C.getpid() .. " epoll_wait enter...")
+		local n = ffi.C.epoll_wait(g_epoll_fd, ev_set, MAX_EPOLL_EVENT, wait_timeout)
+		print("# pid=" .. ffi.C.getpid() .. " epoll_wait exit...")
 
-		for ev_idx = 0, nevents-1 do
-			local fd = ev_set[ev_idx].data.fd
-			n_events = n_events + 1
-			assert(handlers[fd])
-			handlers[fd].handler(handlers[fd], ev_set[ev_idx].events)
-			if expect_events and n_events >= expect_events then
-				return n_events
+		if n == -1 then return n_events, utils.strerror() end
+
+		if n > 0 then
+			for ev_idx = 0, n-1 do
+				local fd = ev_set[ev_idx].data.fd
+				n_events = n_events + 1
+				assert(handlers[fd])
+				handlers[fd].handler(handlers[fd], ev_set[ev_idx].events)
 			end
+		end
+
+		if expect_events and n_events >= expect_events then
+			return n_events
 		end
 	end
 end
@@ -114,6 +122,7 @@ return {
 	add_prepare_hook = add_prepare_hook,
 	init = init,
 	run = run,
+
 	-- constants
 	EPOLLIN=EPOLLIN,
 	EPOLLPRI=EPOLLPRI,

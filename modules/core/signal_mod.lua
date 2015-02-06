@@ -53,11 +53,12 @@ local siginfo = ffi.new("struct signalfd_siginfo")
 local signal_ev
 
 local function add_signal_handler(signo, handler)
-	if not handlers[signo] then handlers[signo] = {} end
+	if not handlers[signo] then
+		handlers[signo] = setmetatable({},{__mode="v"})
+	end
 	if #handlers[signo] == 0 then
 		ffi.C.sigaddset(g_mask, signo)
 		ffi.C.sigprocmask(SIG_BLOCK, g_mask, nil)
-		handlers[signo] = {}
 		table.insert(handlers[signo], handler)
 		g_signalfd = ffi.C.signalfd(g_signalfd, g_mask, 0)
 		assert(g_signalfd > 0)
