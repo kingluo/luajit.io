@@ -16,6 +16,8 @@ struct tm {
    int tm_wday;        /* day of the week */
    int tm_yday;        /* day in the year */
    int tm_isdst;       /* daylight saving time */
+  long int tm_gmtoff;		/* Seconds east of UTC.  */
+  const char *tm_zone;		/* Timezone abbreviation.  */
 };
 struct tm *gmtime_r(const time_t *timep, struct tm *result);
 size_t strftime(char *s, size_t max, const char *format, const struct tm *tm);

@@ -129,16 +129,13 @@ local function receive_ll(self, pattern, rlen, options)
 				self.rbuf = ""
 				return nil, "timeout", self.rbuf
 			end
-print"ffi.C.read"
+
 			local err
 			local len = ffi.C.read(self.fd, self.rbuf_c, MAX_RBUF_LEN)
-			print"ffi.C.read 222"
 			local errno = ffi.errno()
 
 			if len > 0 then
-			print"egewgewgeg"
 				self.rbuf = self.rbuf .. ffi.string(self.rbuf_c, len)
-				print"3333333333333"
 				break
 			elseif len == 0 then
 				-- for socket, means closed by peer?
@@ -146,9 +143,7 @@ print"ffi.C.read"
 				self:close()
 				err = "socket closed"
 			elseif errno == EAGAIN then
-			print"co.yield(co.YIELD_IO, self.fd)"
 				co.yield(co.YIELD_IO, self.fd)
-				print"co.yield(co.YIELD_IO, self.fd) 222"
 			elseif errno ~= EINTR then
 				self:close()
 				err = utils.strerror(errno)
@@ -332,7 +327,6 @@ function tcp_mt.__index.accept(self)
 	sock.port = port
 	sock.listen = self.listen
 	ep.add_event(sock.ev, ep.EPOLLIN, ep.EPOLLRDHUP, ep.EPOLLET)
-	print"accept 22222222"
 	return sock
 end
 
@@ -455,10 +449,9 @@ local function run(cfg, overwrite_handler)
 						do_all_listen_sk(function(ssock) ep.del_event(ssock.ev) end)
 						wait_listen_sk = false
 					end
-					print"co.spawn"
 					co.spawn(
 						function()
-							local r1,r2 = pcall(function() print"YYYYYYYYYYYYYYYYY";return conn_handler(sock) end)
+							local r1,r2 = pcall(function() return conn_handler(sock) end)
 							if r1 == false then print(r2); os.exit(1) end
 							return r2
 						end,
@@ -473,7 +466,6 @@ local function run(cfg, overwrite_handler)
 							end
 						end
 					)
-					print"co.spawn 222"
 				else
 					print("child pid=" .. ffi.C.getpid() .. " accept error: " .. err)
 				end

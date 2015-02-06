@@ -128,7 +128,6 @@ local function co_wait(...)
 end
 
 local function resume_wait_io_list(fd)
-print"resume_wait_io_list start"
 	local co_list = co_wait_io_list[fd]
 	local n_co = 0
 	if co_list then
@@ -138,7 +137,6 @@ print"resume_wait_io_list start"
 			table.remove(co_list,1)
 		end
 	end
-	print"resume_wait_io_list end"
 	return n_co
 end
 
