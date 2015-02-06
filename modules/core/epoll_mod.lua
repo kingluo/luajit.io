@@ -36,22 +36,27 @@ local EPOLLRDHUP=0x2000
 local g_epoll_fd
 local g_prepare_hooks = {}
 local handlers = setmetatable({},{__mode="v"})
-local handlers = {}
 
 local ev_c = ffi.new("struct epoll_event")
 local MAX_EPOLL_EVENT = 128
 local ev_set = ffi.new("struct epoll_event[?]", MAX_EPOLL_EVENT)
 
 local function add_event(ev, ...)
+	print"XXXXXXXXXXX"
 	local fd = ev.fd
 	assert(fd)
-	if not handlers[fd] then handlers[fd] = ev end
+	print("XXXXXXXXXX   X22222222 fd=" .. fd)
+	if handlers[fd] ~= nil then print "NO NIL" end
+	print"XXXXXXXXXX   X22233333"
+	handlers[fd] = ev
 	local cmd
 	if not ev.ev_c then
+	print"FFFFFFFFF"
 		ev.ev_c = ffi.new("struct epoll_event")
 		ev.ev_c.data.fd = fd
 		cmd = EPOLL_CTL_ADD
 	else
+	print"fffffffffffffffff"
 		cmd = EPOLL_CTL_MOD
 	end
 	ev.ev_c.events = bit.bor(ev.ev_c.events, ...)
@@ -98,12 +103,14 @@ local function run(expect_events)
 
 		for ev_idx = 0, nevents-1 do
 			local fd = ev_set[ev_idx].data.fd
+			print("> handle fd=" .. fd)
 			n_events = n_events + 1
 			assert(handlers[fd])
 			handlers[fd].handler(handlers[fd], ev_set[ev_idx].events)
 			if expect_events and n_events >= expect_events then
 				return n_events
 			end
+			print("< handle fd=" .. fd)
 		end
 	end
 end

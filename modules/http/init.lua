@@ -1,12 +1,8 @@
+require("core.base")
 local ffi = require("ffi")
-local tcp = require("core.tcp_mod")
+local tcp = require("socket.tcp_mod")
 
 ffi.cdef[[
-typedef int ssize_t;
-typedef unsigned int size_t;
-
-int getpid(void);
-
 typedef int time_t;
 typedef long suseconds_t;
 time_t time(time_t *t);

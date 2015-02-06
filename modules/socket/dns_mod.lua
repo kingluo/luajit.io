@@ -4,7 +4,6 @@ local co = require("core.co_mod")
 local signal = require("core.signal_mod")
 
 ffi.cdef[[
-typedef unsigned int socklen_t;
 struct addrinfo {
 int              ai_flags;
 int              ai_family;

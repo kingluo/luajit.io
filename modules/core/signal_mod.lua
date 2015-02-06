@@ -50,6 +50,7 @@ local g_signalfd = -1
 local g_mask = ffi.new("sigset_t")
 ffi.C.sigemptyset(g_mask)
 local siginfo = ffi.new("struct signalfd_siginfo")
+local signal_ev
 
 local function add_signal_handler(signo, handler)
 	if not handlers[signo] then handlers[signo] = {} end
@@ -89,14 +90,16 @@ local function init()
 		g_signalfd = ffi.C.signalfd(g_signalfd, g_mask, 0)
 		assert(g_signalfd > 0)
 	end
-	local signal_ev = {fd = g_signalfd, handler = function()
-		local siginfo = ffi.new("struct signalfd_siginfo")
-		assert(ffi.C.read(g_signalfd, siginfo, ffi.sizeof(siginfo)) == ffi.sizeof(siginfo))
-		for _, handler in ipairs(handlers[siginfo.ssi_signo]) do
-			handler(siginfo)
-		end
-	end}
-	ep.add_event(signal_ev, ep.EPOLLIN)
+	if not signal_ev then
+		signal_ev = {fd = g_signalfd, handler = function()
+			local siginfo = ffi.new("struct signalfd_siginfo")
+			assert(ffi.C.read(g_signalfd, siginfo, ffi.sizeof(siginfo)) == ffi.sizeof(siginfo))
+			for _, handler in ipairs(handlers[siginfo.ssi_signo]) do
+				handler(siginfo)
+			end
+		end}
+		ep.add_event(signal_ev, ep.EPOLLIN)
+	end
 end
 
 return {

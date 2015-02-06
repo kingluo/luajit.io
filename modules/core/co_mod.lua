@@ -64,8 +64,6 @@ local function co_resume(co, ...)
 end
 
 local function co_yield(flag, fd, ...)
-	if not flag then flag = YIELD_IDLE end
-
 	local co = coroutine.running()
 	assert(co)
 
@@ -129,11 +127,33 @@ local function co_wait(...)
 	return r,flag,data
 end
 
+local function resume_wait_io_list(fd)
+print"resume_wait_io_list start"
+	local co_list = co_wait_io_list[fd]
+	local n_co = 0
+	if co_list then
+		n_co = #co_list
+		for i=1,n_co do
+			co_resume(co_list[1])
+			table.remove(co_list,1)
+		end
+	end
+	print"resume_wait_io_list end"
+	return n_co
+end
+
+local function resume_idle_list()
+	for i=1,#co_idle_list do
+		co_resume(co_idle_list[1])
+		table.remove(co_idle_list,1)
+	end
+	return #co_idle_list
+end
+
 return {
-	-- containers
-	idle_list = co_idle_list,
-	wait_io_list = co_wait_io_list,
 	-- functions
+	resume_idle_list = resume_idle_list,
+	resume_wait_io_list = resume_wait_io_list,
 	spawn = co_spawn,
 	wait = co_wait,
 	kill = co_kill,

@@ -1,6 +1,7 @@
 local ffi = require("ffi")
 
 ffi.cdef[[
+typedef unsigned int socklen_t;
 struct in_addr {
 	unsigned int  s_addr;
 };
@@ -29,6 +30,7 @@ int connect(int sockfd, const struct sockaddr *addr,
 		   unsigned int addrlen);
 int listen(int sockfd, int backlog);
 int accept(int sockfd, struct sockaddr *addr, unsigned int *addrlen);
-
+int getsockopt(int sockfd, int level, int optname,
+			  void *optval, socklen_t *optlen);
 int setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen);
 ]]
