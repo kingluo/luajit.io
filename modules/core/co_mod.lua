@@ -1,14 +1,6 @@
 local timer = require("core.timer_mod")
 local add_timer = timer.add_timer
 
--- coroutine yield flag
-local YIELD_IO = 1
-local YIELD_SLEEP = 2
-local YIELD_IDLE = 3
-local YIELD_WAIT = 4
-local YIELD_DNS = 5
-
-local co_wait_io_list = {}
 local co_idle_list = setmetatable({},{__mode="v"})
 local co_info = {}
 
@@ -63,20 +55,28 @@ local function co_resume(co, ...)
 	return r,flag,data
 end
 
-local function co_yield(flag, fd, ...)
+local epoll_hook_registered = false
+local function co_yield_idle(flag, fd, ...)
 	local co = coroutine.running()
 	assert(co)
 
-	if flag == YIELD_IO then
-		if not co_wait_io_list[fd] then
-			co_wait_io_list[fd] = setmetatable({},{__mode="v"})
-		end
-		table.insert(co_wait_io_list[fd], co)
-	elseif flag == YIELD_IDLE then
-		table.insert(co_idle_list, co)
+	if epoll_hook_registered == false then
+		ep.add_prepare_hook(function()
+			for i=1,#co_idle_list do
+				co_resume(co_idle_list[1])
+				table.remove(co_idle_list,1)
+			end
+			return ((#co_idle_list > 0) and 1 or -1)
+		end)
+		epoll_hook_registered = true
 	end
+	table.insert(co_idle_list, co)
 
 	return coroutine.yield(flag, fd, ...)
+end
+
+local function co_yield(...)
+	return coroutine.yield(...)
 end
 
 local function co_spawn(fn, gc)
@@ -94,7 +94,7 @@ local function co_sleep(sec)
 	local co = coroutine.running()
 	assert(co)
 	add_timer(function() co_resume(co) end, sec)
-	co_yield(YIELD_SLEEP)
+	co_yield()
 end
 
 local function co_wait(...)
@@ -117,7 +117,7 @@ local function co_wait(...)
 		local co = select(i,...)
 		co_info[co].wait_by_parent = true
 	end
-	local r,flag,data = co_yield(YIELD_WAIT)
+	local r,flag,data = co_yield()
 	for i=1,n do
 		local co = select(i,...)
 		if co_info[co] then
@@ -127,41 +127,13 @@ local function co_wait(...)
 	return r,flag,data
 end
 
-local function resume_wait_io_list(fd)
-	local co_list = co_wait_io_list[fd]
-	local n_co = 0
-	if co_list then
-		n_co = #co_list
-		for i=1,n_co do
-			co_resume(co_list[1])
-			table.remove(co_list,1)
-		end
-	end
-	return n_co
-end
-
-local function resume_idle_list()
-	for i=1,#co_idle_list do
-		co_resume(co_idle_list[1])
-		table.remove(co_idle_list,1)
-	end
-	return #co_idle_list
-end
-
 return {
 	-- functions
-	resume_idle_list = resume_idle_list,
-	resume_wait_io_list = resume_wait_io_list,
 	spawn = co_spawn,
 	wait = co_wait,
 	kill = co_kill,
 	sleep = co_sleep,
 	resume = co_resume,
 	yield = co_yield,
-	-- constants
-	YIELD_IO = YIELD_IO,
-	YIELD_SLEEP = YIELD_SLEEP,
-	YIELD_IDLE = YIELD_IDLE,
-	YIELD_WAIT = YIELD_WAIT,
-	YIELD_DNS = YIELD_DNS,
+	yield_idle = co_yield_idle,
 }

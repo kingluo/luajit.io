@@ -39,7 +39,8 @@ http {
 					-- assert(co.wait(co1))
 					-- assert(co.wait(co2))
 					--while true do
-					-- print(dns.resolve("debian", 80))
+					print(dns.resolve("localhost", 80))
+					collectgarbage()
 					--end
 					return rsp:say("hello world, conf ok!\n")
 				end,

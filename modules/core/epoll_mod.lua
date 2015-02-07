@@ -88,10 +88,16 @@ local function run(expect_events)
 	assert((expect_events == nil) or (expect_events >= 0))
 	local n_events = 0
 	while true do
-		local wait_timeout,to_exit
+		local wait_timeout = -1
+		local to_exit = false
 		for _,hook in ipairs(g_prepare_hooks) do
-			wait_timeout,to_exit = hook()
+			t,to_exit = hook()
 			if to_exit == true then return n_events end
+			if t and t >= 0 then
+				if wait_timeout == -1 or t < wait_timeout then
+					wait_timeout = t
+				end
+			end
 		end
 
 		print("# pid=" .. ffi.C.getpid() .. " epoll_wait enter...")

@@ -58,12 +58,11 @@ local function add_signal_handler(signo, handler)
 	end
 	if #handlers[signo] == 0 then
 		ffi.C.sigaddset(g_mask, signo)
-		ffi.C.sigprocmask(SIG_BLOCK, g_mask, nil)
-		table.insert(handlers[signo], handler)
+		assert(ffi.C.sigprocmask(SIG_SETMASK, g_mask, nil) == 0)
 		g_signalfd = ffi.C.signalfd(g_signalfd, g_mask, 0)
 		assert(g_signalfd > 0)
 	end
-	return handler
+	table.insert(handlers[signo], handler)
 end
 
 local function del_signal_handler(signo, handler)
@@ -74,11 +73,11 @@ local function del_signal_handler(signo, handler)
 				break
 			end
 		end
-		-- if #handlers[signo] == 0 then
-			-- ffi.C.sigdelset(g_mask, signo)
-			-- ffi.C.sigprocmask(SIG_SETMASK, g_mask, nil)
-			-- ffi.C.signalfd(g_signalfd, g_mask, 0)
-		-- end
+		if #handlers[signo] == 0 then
+			ffi.C.sigdelset(g_mask, signo)
+			assert(ffi.C.sigprocmask(SIG_SETMASK, g_mask, nil) == 0)
+			assert(ffi.C.signalfd(g_signalfd, g_mask, 0) > 0)
+		end
 	end
 end
 

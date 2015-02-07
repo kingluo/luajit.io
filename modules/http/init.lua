@@ -255,18 +255,21 @@ function http_rsp_mt.__index.send_headers(self)
 	end
 end
 
-function http_rsp_mt.__index.say(self, str)
+function http_rsp_mt.__index.say(self, ...)
 	local err = self:send_headers()
 	if err then return err end
 
 	local sk = self.sock
 
 	if self.headers["transfer-encoding"] == "chunked" then
-		local size = string.format("%X\r\n", string.len(str))
-		local ret,err = sk:send(size, str, "\r\n")
-		if err then return err end
+		for i=1,select("#",...) do
+			local str = select(i,...)
+			local size = string.format("%X\r\n", string.len(str))
+			local ret,err = sk:send(size, str, "\r\n")
+			if err then return err end
+		end
 	else
-		local ret,err = sk:send(str)
+		local ret,err = sk:send(...)
 		if err then return err end
 	end
 end

@@ -5,6 +5,7 @@ ffi.cdef[[
 struct fd_guard {int fd;};
 int ioctl(int d, int request, ...);
 int close(int fd);
+char *strerror(int errnum);
 ]]
 
 local fd_guard = ffi.metatype("struct fd_guard", {
@@ -32,7 +33,7 @@ local function import(m)
 	end
 end
 
-local function strerrno(errno)
+local function strerror(errno)
 	return ffi.string(ffi.C.strerror(errno or ffi.errno()))
 end
 
@@ -45,6 +46,6 @@ return {
 	import = import,
 	fd_guard = fd_guard,
 	set_nonblock = set_nonblock,
-	strerrno = strerrno,
+	strerror = strerror,
 	bin2hex = bin2hex,
 }
