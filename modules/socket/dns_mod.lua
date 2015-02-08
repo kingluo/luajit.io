@@ -64,8 +64,8 @@ local function handle_answer(siginfo)
 	assert(siginfo.ssi_code == SI_ASYNCNL)
 	local key = siginfo.ssi_int
 	local req = requests[key]
+	if not req then return end
 	local gaicb = req.gaicb
-	local caller = req.co
 	local runp = gaicb.ar_result
 	local ip, port
 	while runp ~= nil do
@@ -80,13 +80,14 @@ local function handle_answer(siginfo)
 	end
 	anl.freeaddrinfo(gaicb.ar_result)
 	requests[key] = nil
-	return co.resume(caller, ip, port)
+	if req.handler then return handler(ip, port) end
+	return co.resume(req.co, ip, port)
 end
 
 local tmp = ffi.new("struct gaicb*[1]")
 local sig = ffi.new("struct sigevent")
 local next_req_key = 1
-local function resolve(host, port)
+local function resolve(host, port, handler)
 	if handler_registered == false then
 		handler_registered = true
 		signal.add_signal_handler(SIGIO, handle_answer)
@@ -94,7 +95,11 @@ local function resolve(host, port)
 
 	local gaicb = ffi.new("struct gaicb")
 	assert(requests[next_req_key] == nil)
-	requests[next_req_key] = {gaicb = gaicb, co = coroutine.running()}
+	local data = {gaicb = gaicb}
+	if handler then data.handler = handler
+	else data.co = coroutine.running() end
+	requests[next_req_key] = data
+
 	gaicb.ar_name = host
 	port = (type(port) == "number") and tostring(port) or port
 	gaicb.ar_service = port
@@ -104,9 +109,16 @@ local function resolve(host, port)
 	sig.sigev_signo = SIGIO
 	tmp[0] = gaicb
 	assert(anl.getaddrinfo_a(GAI_NOWAIT, tmp, 1, sig) == 0)
+
+	if handler then return sig.sigev_value.sival_int end
 	return co.yield()
+end
+
+local function cancel_resolve(key)
+	requests[key] = nil
 end
 
 return {
 	resolve = resolve,
+	cancel_resolve = cancel_resolve,
 }

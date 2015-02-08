@@ -93,7 +93,10 @@ function tcp_mt.__index.close(self)
 		ffi.C.close(self.fd)
 		self.guard.fd = -1
 		self.closed = true
+	else
+		return nil, "closed"
 	end
+	return 1
 end
 
 function tcp_mt.__index.settimeout(sec)
@@ -133,29 +136,29 @@ local function receive_ll(self, pattern, rlen, options)
 				end
 			elseif mode == READ_UNTIL then
 				local i,j
-				if not self.last_matched then
+				if not self.receiveutil_state then
 					i,j = string.find(self.rbuf, pattern)
-					if i then self.last_matched = {i=i,j=j} end
+					if i then self.receiveutil_state = {i=i,j=j} end
 				else
-					i,j = self.last_matched.i, self.last_matched.j
+					i,j = self.receiveutil_state.i, self.receiveutil_state.j
 				end
 				if i then
-					if i == 1 then
-						if option.inclusive then
+					if i == 0 and j == 0 then
+						if not option.inclusive then
 							self.rbuf = string.sub(self.rbuf, j + 1)
 						end
-						self.last_matched = nil
+						self.receiveutil_state = nil
 						return nil
 					end
 					if option.inclusive then i = j else i = i - 1 end
 					if rlen and rlen < i then i = rlen end
 					local str = string.sub(self.rbuf, 1, i)
 					self.rbuf = string.sub(self.rbuf, i + 1)
-					self.last_matched.i = self.last_matched.i - i
-					self.last_matched.j = self.last_matched.j - i
-					assert(self.last_matched.j >= 0)
-					if self.last_matched.j == 0 then
-						self.last_matched.i = 1
+					self.receiveutil_state.i = self.receiveutil_state.i - i
+					self.receiveutil_state.j = self.receiveutil_state.j - i
+					assert(self.receiveutil_state.j >= 0)
+					if self.receiveutil_state.j == 0 then
+						self.receiveutil_state.i = 0
 					end
 					return str
 				elseif rlen and rlen <= rbuf_len then
@@ -168,7 +171,7 @@ local function receive_ll(self, pattern, rlen, options)
 
 		while true do
 			if self.rtimedout then
-				assert(self.last_matched == nil)
+				assert(self.receiveutil_state == nil)
 				local str = self.rbuf
 				self.rbuf = ""
 				return nil, "timeout", self.rbuf
@@ -182,8 +185,6 @@ local function receive_ll(self, pattern, rlen, options)
 				self.rbuf = self.rbuf .. ffi.string(self.rbuf_c, len)
 				break
 			elseif len == 0 then
-				-- for socket, means closed by peer?
-				-- how about other types of fd?
 				self:close()
 				err = "socket closed"
 			elseif errno == EAGAIN then
@@ -217,8 +218,6 @@ function tcp_mt.__index.receive(self, pattern)
 
 	self.rtimedout = false
 	if self.timeout and self.timeout > 0 then
-		local cur_co = coroutine.running()
-		assert(cur_co)
 		self.rtimer = timer.add_timer(function()
 			self.rtimedout = true
 			if self[YIELD_R] then
@@ -357,8 +356,6 @@ function tcp_mt.__index.send(self, ...)
 
 	self.wtimedout = false
 	if self.timeout and self.timeout > 0 then
-		local cur_co = coroutine.running()
-		assert(cur_co)
 		self.wtimer = timer.add_timer(function()
 			self.wtimedout = true
 			if self[YIELD_W] then
@@ -400,7 +397,7 @@ function tcp_mt.__index.bind(self, ip, port)
 	end
 	self.ip = ip
 	self.port = port
-	return true
+	return 1
 end
 
 function tcp_mt.__index.listen(self, backlog, handler)
@@ -410,7 +407,7 @@ function tcp_mt.__index.listen(self, backlog, handler)
 	self.listen = self.ip .. ":" .. self.port
 	self.ev.handler = handler
 	ep.add_event(self.ev, ep.EPOLLIN)
-	return true
+	return 1
 end
 
 function tcp_mt.__index.accept(self)
@@ -430,6 +427,8 @@ function tcp_mt.__index.accept(self)
 end
 
 function tcp_mt.__index.setkeepalive(self, timeout, size)
+	if not self.pname then return nil, "not outgoing connection" end
+
 	local pool = pools[self.pname]
 	if not pool then
 		pools[self.pname] = {size=0, maxsize=size or g_tcp_cfg.lua_socket_pool_size or 30}
@@ -452,7 +451,7 @@ function tcp_mt.__index.setkeepalive(self, timeout, size)
 
 	local timeout = timeout or g_tcp_cfg.lua_socket_keepalive_timeout or 60
 	if timeout > 0 then
-		self.timer = timer.add_timer(function()
+		self.keepalive_timer = timer.add_timer(function()
 			self.next.prev = self.prev
 			self.prev.next = self.next
 			self:close()
@@ -460,6 +459,8 @@ function tcp_mt.__index.setkeepalive(self, timeout, size)
 		end, timeout)
 	end
 	self.closed = true
+
+	return 1
 end
 
 function tcp_mt.__index.connect(self, host, port, options_table)
@@ -475,8 +476,8 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 	if pool then
 		local sock = pool.next
 		if sock then
-			sock.timer:cancel()
-			sock.timer = nil
+			sock.keepalive_timer:cancel()
+			sock.keepalive_timer = nil
 
 			-- copy fields
 			self.ip = sock.ip
@@ -484,21 +485,50 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 			self.fd = sock.fd
 			self.ev = sock.ev
 			self.guard = sock.guard
+			self.reusedtimes = sock.reusedtimes
+			if not self.reusedtimes then reusedtimes = 0 end
+			self.reusedtimes = self.reusedtimes + 1
 			self.connected = true
 
 			-- update the pool
 			sock.next.prev = pool
 			pool.next = sock.next
 			pool.size = pool.size - 1
-			return true
+			return 1
 		end
+	end
+
+	-- set connect timer
+	self.wtimedout = false
+	if self.timeout and self.timeout > 0 then
+		self.wtimer = timer.add_timer(function()
+			if self[YIELD_W] then
+				self.wtimedout = true
+				co.resume(self[YIELD_W])
+			end
+		end, self.timeout)
 	end
 
 	-- resolve host and/or port if needed
 	if host:find("^%d+%.%d+%.%d+%.%d+$") == nil or type(port) ~= "number" then
-		host,port = dns.resolve(host, port)
-		if host == nil or port == nil then
-			return nil, "resolve failed"
+		self.resolve_key = dns.resolve(host, port, function(ip, port)
+			co.resume(self[YIELD_W], ip, port)
+		end)
+		host, port = sock_yield(self, YIELD_W)
+		local err
+		if self.wtimedout then
+			dns.cancel_resolve(self.resolve_key)
+			self.resolve_key = nil
+			err = "timeout"
+		elseif host == nil or port == nil then
+			err = "resolve failed"
+		end
+		if err then
+			if self.wtimer then
+				self.wtimer:cancel()
+				self.wtimer = nil
+			end
+			return nil, err
 		end
 	end
 
@@ -506,6 +536,7 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 	create_tcp_socket(self)
 
 	-- do non-blocking connect
+	local err
 	self.ip = host
 	self.port = port
 	local addr = ffi.new("struct sockaddr_in")
@@ -520,21 +551,39 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 			ep.add_event(self.ev, ep.EPOLLOUT, ep.EPOLLIN, ep.EPOLLRDHUP, ep.EPOLLET)
 			sock_yield(self, YIELD_W)
 			ep.del_event(self.ev, ep.EPOLLOUT)
+			if self.wtimedout then
+				err = "timeout"
+				break
+			end
 			local option = ffi.new("int[1]", 1)
 			local len = ffi.new("int[1]", 1)
 			assert(ffi.C.getsockopt(sk, SOL_SOCKET, SO_ERROR, ffi.cast("void*",option), len) == 0)
-			if err ~= 0 then
-				self:close()
-				return nil, utils.strerror(err)
+			if option[0] ~= 0 then
+				err = utils.strerror(err)
 			end
 			break
 		elseif errno ~= EINTR then
-			self:close()
-			return nil, utils.strerror(errno)
+			err = utils.strerror(errno)
+			break
 		end
 	end
+
+	if self.wtimer then
+		self.wtimer:cancel()
+		self.wtimer = nil
+	end
+
+	if err then
+		self:close()
+		return nil, err
+	end
+
 	self.connected = true
-	return true
+	return 1
+end
+
+function tcp_mt.__index.getreusedtimes(self)
+	return self.reusedtimes or 0
 end
 
 --#--
