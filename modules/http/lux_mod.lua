@@ -73,8 +73,9 @@ local function service(req, rsp, cf)
 		fn(req, rsp, function(s) rsp:say(s) end)
 	end)
 	if ret == false then
-		return err
+		return nil,err
 	end
+	return 1
 end
 
 return {service = service}

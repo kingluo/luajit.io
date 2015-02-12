@@ -190,9 +190,9 @@ end
 local http_req_mt = {__index={}}
 function http_req_mt.__index.read_body(self, sink)
 	if self.method ~= 'POST' then return "only support POST" end
-	if not self.__priv.body_read then
+	if not self.body_read then
 		receive_body(self.sock, self.headers, sink)
-		self.__priv.body_read = true
+		self.body_read = true
 	end
 end
 
@@ -220,7 +220,7 @@ local function http_time()
 end
 
 function http_rsp_mt.__index.send_headers(self)
-	if not self.__priv.headers_sent then
+	if not self.headers_sent then
 		local sk = self.sock
 		local status = status_tbl[self.status or 200] or status_tbl[500]
 		local ret,err = sk:send(status)
@@ -244,44 +244,88 @@ function http_rsp_mt.__index.send_headers(self)
 			self.headers["connection"] = "close"
 		end
 
-		local h = "\r\n"
+		if not self.output_buf then self.output_buf = {} end
+		local tbl = self.output_buf
+		local eol = "\r\n"
+		local sep = ": "
 		for f, v in pairs(self.headers) do
-			h = f .. ": " .. v .. "\r\n" .. h
+			table.insert(tbl, f)
+			table.insert(tbl, sep)
+			table.insert(tbl, v)
+			table.insert(tbl, eol)
 		end
+		table.insert(tbl, eol)
 
-		local ret,err = sk:send(h)
+		local ret,err = sk:send(tbl)
 		if err then return err end
-		self.__priv.headers_sent = true
+		self.headers_sent = true
 	end
 end
+
+local postpone_output = 1460
 
 function http_rsp_mt.__index.say(self, ...)
 	local err = self:send_headers()
-	if err then return err end
+	if err then return nil,err end
 
-	local sk = self.sock
-
-	if self.headers["transfer-encoding"] == "chunked" then
-		for i=1,select("#",...) do
-			local str = select(i,...)
-			local size = string.format("%X\r\n", string.len(str))
-			local ret,err = sk:send(size, str, "\r\n")
-			if err then return err end
+	if not self.is_chunked then
+		self.is_chunked = self.headers["transfer-encoding"] == "chunked"
+	end
+	local tbl = self.output_buf
+	if not self.output_buf_bytes then self.output_buf_bytes = 0 end
+	if not self.output_buf_idx then self.output_buf_idx = 1 end
+	local eol = "\r\n"
+	for i=1,select("#",...) do
+		local str = select(i,...)
+		local len = #str
+		self.output_buf_bytes = self.output_buf_bytes + len
+		if self.is_chunked then
+			local size = string.format("%X\r\n", len)
+			tbl[self.output_buf_idx] = size
+			self.output_buf_idx = self.output_buf_idx + 1
+			self.output_buf_bytes = self.output_buf_bytes + #size
+			tbl[self.output_buf_idx] = str
+			self.output_buf_idx = self.output_buf_idx + 1
+			tbl[self.output_buf_idx] = eol
+			self.output_buf_idx = self.output_buf_idx + 1
+			self.output_buf_bytes = self.output_buf_bytes + 1
+		else
+			tbl[self.output_buf_idx] = str
+			self.output_buf_idx = self.output_buf_idx + 1
 		end
-	else
-		local ret,err = sk:send(...)
+	end
+
+	if self.output_buf_bytes >= postpone_output then
+		tbl[self.output_buf_idx] = nil
+		self.output_buf_idx = 1
+		self.output_buf_bytes = 0
+		local ret,err = self.sock:send(tbl)
+		if err then return nil,err end
+	end
+
+	return 1
+end
+
+function http_rsp_mt.__index.flush(self)
+	if self.output_buf_bytes and self.output_buf_bytes > 0 then
+		local tbl = self.output_buf
+		tbl[self.output_buf_idx] = nil
+		self.output_buf_idx = 1
+		self.output_buf_bytes = 0
+		local ret,err = self.sock:send(tbl)
 		if err then return err end
 	end
+	return 1
 end
 
 local function http_req_new(method, url, headers, sock)
-	return setmetatable({__priv = {},
+	return setmetatable({body_read = false,
 		method = method, url = url,
 		headers = headers, sock = sock}, http_req_mt)
 end
 
 local function http_rsp_new(req, sock)
-	return setmetatable({__priv = {}, headers = {}, sock = sock, req = req}, http_rsp_mt)
+	return setmetatable({headers_sent = false, headers = {}, sock = sock, req = req}, http_rsp_mt)
 end
 
 local g_http_cfg
@@ -358,17 +402,17 @@ local function do_servlet(req, rsp)
 	if servlet then
 		local fn = servlet[3]
 		local extra = servlet[4]
-		local err
+		local ret, err
 		if type(fn) == 'string' then
 			fn = require(fn)
 			assert(fn)
-			err = fn.service(req,rsp,target_srv,extra)
+			ret,err = fn.service(req,rsp,target_srv,extra)
 		elseif type(fn) == 'function' then
-			err = fn(req,rsp,target_srv,extra)
+			ret,err = fn(req,rsp,target_srv,extra)
 		end
 		if not err then
+			rsp:flush()
 			if rsp.headers["transfer-encoding"] == "chunked" then
-				local ret
 				ret,err = rsp.sock:send("0\r\n\r\n")
 			end
 		end

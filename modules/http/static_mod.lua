@@ -60,7 +60,8 @@ local function service(req, rsp, cf)
 		end
 	end
 	assert(ffi.C.close(fd) == 0)
-	if err then return err end
+	if err then return nil,err end
+	return 1
 end
 
 return {service = service}
