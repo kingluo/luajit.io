@@ -81,7 +81,15 @@ end
 
 local function co_spawn(fn, gc)
 	local parent = coroutine.running()
-	local co = coroutine.create(fn)
+	local co = coroutine.create(function(...)
+		-- make sandbox
+		local G = {}
+		G._G = G
+		setmetatable(G, {__index = getfenv(0)})
+		setfenv(0, G)
+		setfenv(1, G)
+		return fn(...)
+	end)
 	co_info[co] = {parent=parent, gc=gc,
 		childs=setmetatable({},{__mode="k"}),
 		exit_childs=setmetatable({},{__mode="k"})}
