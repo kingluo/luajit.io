@@ -31,7 +31,7 @@ local buf = ffi_new("char[16]")
 local ctx_ptr_type = ffi.typeof("MD5_CTX[1]")
 local ssl = ffi.load("ssl")
 
-function _M.new(self)
+function new()
     local ctx = ffi_new(ctx_ptr_type)
     if ssl.MD5_Init(ctx) == 0 then
         return nil
@@ -69,7 +69,7 @@ return setmetatable({
 		end
 		if ssl.MD5_Final(buf, ctx) == 1 then
 			local s = ffi_str(buf, 16)
-			s = string.gsub(s,"(.)",function (x) return string.format("%x",string.byte(x)) end)
+			s = string.gsub(s,"(.)",function (x) return string.format("%.2x",string.byte(x)) end)
 			return s
 		end
 	end
