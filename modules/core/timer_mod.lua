@@ -1,6 +1,7 @@
 local ffi = require("ffi")
 local rt = ffi.load("rt")
 local ep = require("core.epoll_mod")
+local rbtree = require("core.rbtree")
 
 ffi.cdef[[
 int getpid(void);
@@ -30,13 +31,24 @@ local CLOCK_MONOTONIC_RAW=4
 
 local g_timer_fd
 local g_timer_ev = {}
-local g_timers = {}
+
+local function timer_lt(a,b)
+	if a.tv_sec < b.tv_sec then return true end
+	if a.tv_sec == b.tv_sec and a.tv_nsec < b.tv_nsec then
+		return true
+	end
+	return false
+end
+
+local g_timer_rbtree = rbtree.new(timer_lt)
+
 local timer_mt = {
 	__index = {
 		cancel = function(self)
-			self.canceled = true
+			g_timer_rbtree:delete(self)
 		end
-	}
+	},
+	__lt = timer_lt
 }
 
 local function timerfd_settime(fd, sec, nsec)
@@ -46,14 +58,6 @@ local function timerfd_settime(fd, sec, nsec)
 	timespec.it_value.tv_sec = sec
 	timespec.it_value.tv_nsec = nsec
 	assert(ffi.C.timerfd_settime(fd, 0, timespec, nil) == 0)
-end
-
-local function timer_lt(a,b)
-	if a.tv_sec < b.tv_sec then return true end
-	if a.tv_sec == b.tv_sec and a.tv_nsec < b.tv_nsec then
-		return true
-	end
-	return false
 end
 
 local function add_timer(fn, sec)
@@ -69,10 +73,9 @@ local function add_timer(fn, sec)
 		fn = fn
 	}, timer_mt)
 
-	table.insert(g_timers, timer)
-	table.sort(g_timers, timer_lt)
+	g_timer_rbtree:insert(timer)
 
-	if g_timers[1] == timer then
+	if g_timer_rbtree:min() == timer then
 		timerfd_settime(g_timer_fd, sec, nsec)
 	end
 
@@ -80,34 +83,27 @@ local function add_timer(fn, sec)
 end
 
 local function process_all_timers()
-	local ntimer = #g_timers
-	if ntimer == 0 then return 0 end
+	if g_timer_rbtree:size() == 0 then return 0 end
 
 	local tv = ffi.new("struct timespec")
 	assert(rt.clock_gettime(CLOCK_MONOTONIC_RAW, tv) == 0)
-	local timers = {}
 
-	for i=1,ntimer do
-		local t = g_timers[1]
-		if timer_lt(t, tv) then
-			if not t.canceled then table.insert(timers, t) end
-			table.remove(g_timers, 1)
-		else
-			break
-		end
-	end
+	local n_process = 0
 
-	for _,t in ipairs(timers) do
+	while g_timer_rbtree:size() > 0 do
+		local t = g_timer_rbtree:min()
+		if not timer_lt(t, tv) then break end
 		t.fn()
+		g_timer_rbtree:delete(t)
+		n_process = n_process + 1
 	end
 
-	return #timers
+	return n_process
 end
 
 local function get_next_interval()
-	local t = g_timers[1]
-	if not t then return nil end
-
+	if g_timer_rbtree:size() == 0 then return nil end
+	local t = g_timer_rbtree:min()
 	local tv = ffi.new("struct timespec")
 	assert(rt.clock_gettime(CLOCK_MONOTONIC_RAW, tv) == 0)
 	assert(timer_lt(tv, t))
