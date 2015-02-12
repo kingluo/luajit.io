@@ -137,30 +137,35 @@ local function receive_ll(self, pattern, rlen, options)
 				end
 			elseif mode == READ_UNTIL then
 				local i,j
+				local is_first_invoke = self.receiveutil_state == nil
 				if not self.receiveutil_state then
 					i,j = string.find(self.rbuf, pattern)
-					if i then self.receiveutil_state = {i=i,j=j} end
+					if i then
+						if options and options.inclusive then i = j + 1 end
+						self.receiveutil_state = {i=i,j=j}
+					end
 				else
 					i,j = self.receiveutil_state.i, self.receiveutil_state.j
 				end
+
 				if i then
-					if i == 0 and j == 0 then
-						if not option.inclusive then
+					if i == 1 then
+						if is_first_invoke then return "" end
+						if not options or not options.inclusive then
 							self.rbuf = string.sub(self.rbuf, j + 1)
 						end
 						self.receiveutil_state = nil
 						return nil
 					end
-					if option.inclusive then i = j else i = i - 1 end
+					i = i - 1
 					if rlen and rlen < i then i = rlen end
+
 					local str = string.sub(self.rbuf, 1, i)
 					self.rbuf = string.sub(self.rbuf, i + 1)
+
 					self.receiveutil_state.i = self.receiveutil_state.i - i
 					self.receiveutil_state.j = self.receiveutil_state.j - i
-					assert(self.receiveutil_state.j >= 0)
-					if self.receiveutil_state.j == 0 then
-						self.receiveutil_state.i = 0
-					end
+
 					return str
 				elseif rlen and rlen <= rbuf_len then
 					local str = string.sub(self.rbuf, 1, rlen)
@@ -238,7 +243,7 @@ function tcp_mt.__index.receive(self, pattern)
 	return r,err,partial
 end
 
-function tcp_mt.__index.receiveutil(self, pattern, options)
+function tcp_mt.__index.receiveuntil(self, pattern, options)
 	return function(len)
 		return self:receive(pattern, len, options)
 	end
