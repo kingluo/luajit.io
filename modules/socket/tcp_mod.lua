@@ -20,6 +20,7 @@ local SIGPIPE=13
 
 local EAGAIN = 11
 local EINTR = 4
+local EINPROGRESS = 115
 
 local READ_ALL = 1
 local READ_LINE = 2
@@ -99,8 +100,8 @@ function tcp_mt.__index.close(self)
 	return 1
 end
 
-function tcp_mt.__index.settimeout(sec)
-	self.timeout = sec
+function tcp_mt.__index.settimeout(self, msec)
+	self.timeout = msec / 1000
 end
 
 local function receive_ll(self, pattern, rlen, options)
@@ -260,8 +261,8 @@ local function flatten_table(self, data, idx, bytes)
 				ffi.copy(iovec, self.iovec, bytes)
 				self.iovec = iovec
 			end
-			iovec[idx].iov_base = ffi.cast("void *", s)
-			local len = #s
+			iovec[idx].iov_base = ffi.cast("void *", v)
+			local len = #v
 			iovec[idx].iov_len = len
 			bytes = bytes + len
 			idx = idx + 1
@@ -276,7 +277,7 @@ local function flatten_table(self, data, idx, bytes)
 	return idx, bytes
 end
 
-function send_ll(self, ...)
+local function send_ll(self, ...)
 	if not self.iovec then
 		self.iovec = ffi.new("struct iovec[?]", MAX_IOVCNT)
 		self.iovec_len = MAX_IOVCNT
@@ -431,7 +432,7 @@ function tcp_mt.__index.setkeepalive(self, timeout, size)
 
 	local pool = pools[self.pname]
 	if not pool then
-		pools[self.pname] = {size=0, maxsize=size or g_tcp_cfg.lua_socket_pool_size or 30}
+		pools[self.pname] = {size=0, maxsize=size or 30}
 		pool = pools[self.pname]
 		pool.prev = pool
 		pool.next = pool
@@ -449,7 +450,7 @@ function tcp_mt.__index.setkeepalive(self, timeout, size)
 		pool.size = pool.size + 1
 	end
 
-	local timeout = timeout or g_tcp_cfg.lua_socket_keepalive_timeout or 60
+	local timeout = timeout or 60
 	if timeout > 0 then
 		self.keepalive_timer = timer.add_timer(function()
 			self.next.prev = self.prev
@@ -484,9 +485,10 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 			self.port = sock.port
 			self.fd = sock.fd
 			self.ev = sock.ev
+			self.ev.sock = self
 			self.guard = sock.guard
 			self.reusedtimes = sock.reusedtimes
-			if not self.reusedtimes then reusedtimes = 0 end
+			if not self.reusedtimes then self.reusedtimes = 0 end
 			self.reusedtimes = self.reusedtimes + 1
 			self.connected = true
 
@@ -557,7 +559,7 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 			end
 			local option = ffi.new("int[1]", 1)
 			local len = ffi.new("int[1]", 1)
-			assert(ffi.C.getsockopt(sk, SOL_SOCKET, SO_ERROR, ffi.cast("void*",option), len) == 0)
+			assert(ffi.C.getsockopt(self.fd, SOL_SOCKET, SO_ERROR, ffi.cast("void*",option), len) == 0)
 			if option[0] ~= 0 then
 				err = utils.strerror(err)
 			end
