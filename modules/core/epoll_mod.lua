@@ -91,6 +91,7 @@ local function run(expect_events)
 		local wait_timeout = -1
 		local to_exit = false
 		for _,hook in ipairs(g_prepare_hooks) do
+			local t
 			t,to_exit = hook()
 			if to_exit == true then return n_events end
 			if t and t >= 0 then
