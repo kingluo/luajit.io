@@ -1,5 +1,6 @@
 local ffi = require("ffi")
 
+if ffi.arch == "x86" then
 ffi.cdef[[
 typedef int ssize_t;
 typedef unsigned int size_t;
@@ -15,4 +16,37 @@ int getpid(void);
 
 int close(int fd);
 int ioctl(int d, int request, ...);
+
+typedef int time_t;
+typedef long suseconds_t;
+time_t time(time_t *t);
+struct tm
+{
+  int tm_sec;
+  int tm_min;
+  int tm_hour;
+  int tm_mday;
+  int tm_mon;
+  int tm_year;
+  int tm_wday;
+  int tm_yday;
+  int tm_isdst;
+  long int tm_gmtoff;
+  __const char *tm_zone;
+};
+struct tm *gmtime_r(const time_t *timep, struct tm *result);
+size_t strftime(char *s, size_t max, const char *format, const struct tm *tm);
+
+struct timeval {
+	time_t      tv_sec;     /* seconds */
+	suseconds_t tv_usec;    /* microseconds */
+};
+struct timezone {
+	int tz_minuteswest;     /* minutes west of Greenwich */
+	int tz_dsttime;         /* type of DST correction */
+};
+int gettimeofday(struct timeval *tv, struct timezone *tz);
 ]]
+else
+error("arch not support: " .. ffi.arch)
+end

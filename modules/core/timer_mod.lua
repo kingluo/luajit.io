@@ -3,28 +3,35 @@ local rt = ffi.load("rt")
 local ep = require("core.epoll_mod")
 local rbtree = require("core.rbtree")
 
+if ffi.arch == "x86" then
 ffi.cdef[[
 int getpid(void);
 
-typedef int time_t;
+typedef long int __time_t;
+typedef __time_t time_t;
 
-struct timespec {
-   time_t tv_sec;                /* Seconds */
-   long   tv_nsec;               /* Nanoseconds */
-};
+struct timespec
+  {
+    __time_t tv_sec;
+    long int tv_nsec;
+  };
 
-int clock_gettime(int clk_id, struct timespec *tp);
+typedef int __clockid_t;
+typedef __clockid_t clockid_t;
+int clock_gettime(clockid_t clk_id, struct timespec *tp);
 
 struct itimerspec {
    struct timespec it_interval;  /* Interval for periodic timer */
    struct timespec it_value;     /* Initial expiration */
 };
-int timerfd_create(int clockid, int flags);
-
+int timerfd_create(clockid_t clockid, int flags);
 int timerfd_settime(int fd, int flags,
 				   const struct itimerspec *new_value,
 				   struct itimerspec *old_value);
 ]]
+else
+error("arch not support: " .. ffi.arch)
+end
 
 local CLOCK_MONOTONIC=1
 local CLOCK_MONOTONIC_RAW=4

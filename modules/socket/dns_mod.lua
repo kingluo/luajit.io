@@ -3,45 +3,57 @@ require("socket.base")
 local co = require("core.co_mod")
 local signal = require("core.signal_mod")
 
+if ffi.arch == "x86" then
 ffi.cdef[[
-struct addrinfo {
-int              ai_flags;
-int              ai_family;
-int              ai_socktype;
-int              ai_protocol;
-socklen_t        ai_addrlen;
-struct sockaddr *ai_addr;
-char            *ai_canonname;
-struct addrinfo *ai_next;
+struct addrinfo
+{
+  int ai_flags;
+  int ai_family;
+  int ai_socktype;
+  int ai_protocol;
+  socklen_t ai_addrlen;
+  struct sockaddr *ai_addr;
+  char *ai_canonname;
+  struct addrinfo *ai_next;
 };
 
+typedef int __pid_t;
 typedef union sigval
   {
     int sival_int;
     void *sival_ptr;
   } sigval_t;
-typedef int pid_t;
 typedef struct sigevent
   {
     sigval_t sigev_value;
     int sigev_signo;
     int sigev_notify;
 
-           void       (*sigev_notify_function) (union sigval);
-                            /* Function used for thread
-                               notification (SIGEV_THREAD) */
-           void        *sigev_notify_attributes;
-                            /* Attributes for notification thread
-                               (SIGEV_THREAD) */
-           pid_t        sigev_notify_thread_id;
-                            /* ID of thread to signal (SIGEV_THREAD_ID) */
+    union
+      {
+ int _pad[((64 / sizeof (int)) - 3)];
+
+
+
+ __pid_t _tid;
+
+ struct
+   {
+     void (*_function) (sigval_t);
+     void *_attribute;
+   } _sigev_thread;
+      } _sigev_un;
   } sigevent_t;
 
-struct gaicb {
-const char            *ar_name;
-const char            *ar_service;
-const struct addrinfo *ar_request;
-struct addrinfo       *ar_result;
+struct gaicb
+{
+  const char *ar_name;
+  const char *ar_service;
+  const struct addrinfo *ar_request;
+  struct addrinfo *ar_result;
+
+  int __return;
+  int __unused[5];
 };
 void freeaddrinfo(struct addrinfo *res);
 int getaddrinfo_a(int mode, struct gaicb *list[],
@@ -49,6 +61,9 @@ int getaddrinfo_a(int mode, struct gaicb *list[],
 int gai_error(struct gaicb *req);
 int gai_cancel(struct gaicb *req);
 ]]
+else
+error("arch not support: " .. ffi.arch)
+end
 
 local SIGIO = 29
 local SIGUSR1 = 10
@@ -115,7 +130,11 @@ local function resolve(host, port, handler)
 end
 
 local function cancel_resolve(key)
-	requests[key] = nil
+	local req = requests[key]
+	if req then
+		anl.gai_cancel(req.gaicb)
+		requests[key] = nil
+	end
 end
 
 return {

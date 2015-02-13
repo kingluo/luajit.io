@@ -83,10 +83,10 @@ local function service(req, rsp, cf, extra)
 	-- print(dns.resolve("localhost", 80))
 	-- collectgarbage()
 	--end
-	local data,err = parse_form_data(req)
-	for k,v in pairs(data) do
-		print(k,v)
-	end
+	-- local data,err = parse_form_data(req)
+	-- for k,v in pairs(data) do
+		-- print(k,v)
+	-- end
 
 	-- local db,err = getdb()
 	-- if err then print(err); os.exit(1); end

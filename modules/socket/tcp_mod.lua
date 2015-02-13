@@ -410,7 +410,6 @@ function tcp_mt.__index.listen(self, backlog, handler)
 	backlog = backlog or 1000
 	local ret = ffi.C.listen(self.fd, backlog)
 	if ret ~= 0 then return nil, utils.strerror() end
-	self.listen = self.ip .. ":" .. self.port
 	self.ev.handler = handler
 	ep.add_event(self.ev, ep.EPOLLIN)
 	return 1
@@ -427,7 +426,8 @@ function tcp_mt.__index.accept(self)
 	local sock = tcp_new(cfd)
 	sock.ip = ip
 	sock.port = port
-	sock.listen = self.listen
+	sock.srv_ip = self.ip
+	sock.srv_port = self.port
 	ep.add_event(sock.ev, ep.EPOLLIN, ep.EPOLLRDHUP, ep.EPOLLET)
 	return sock
 end
@@ -600,13 +600,22 @@ local g_tcp_cfg
 local function tcp_parse_conf(cf)
 	g_tcp_cfg = cf
 	local srv_tbl = {}
+	g_tcp_cfg.srv_tbl = srv_tbl
+
 	for _,srv in ipairs(g_tcp_cfg) do
 		for ip,port in string.gmatch(srv.listen, "([%d%.%*]+):(%d+)") do
 			if not srv_tbl[port] then srv_tbl[port] = {} end
-			if ip == '*' then
-				srv_tbl[port] = {['*']=1}
-			elseif not srv_tbl[port]['*'] then
-				srv_tbl[port][ip] = 1
+			if ip == "*" then
+				if not srv_tbl[port]["*"] then
+					srv_tbl[port] = {["*"] = {srv}}
+				else
+					table.insert(srv_tbl[port]["*"], srv)
+				end
+			elseif not srv_tbl[port]["*"] then
+				if not srv_tbl[port][ip] then
+					srv_tbl[port][ip] = {}
+				end
+				table.insert(srv_tbl[port][ip], srv)
 			end
 		end
 	end

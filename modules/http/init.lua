@@ -2,37 +2,6 @@ require("core.base")
 local ffi = require("ffi")
 local tcp = require("socket.tcp_mod")
 
-ffi.cdef[[
-typedef int time_t;
-typedef long suseconds_t;
-time_t time(time_t *t);
-struct tm {
-   int tm_sec;         /* seconds */
-   int tm_min;         /* minutes */
-   int tm_hour;        /* hours */
-   int tm_mday;        /* day of the month */
-   int tm_mon;         /* month */
-   int tm_year;        /* year */
-   int tm_wday;        /* day of the week */
-   int tm_yday;        /* day in the year */
-   int tm_isdst;       /* daylight saving time */
-  long int tm_gmtoff;		/* Seconds east of UTC.  */
-  const char *tm_zone;		/* Timezone abbreviation.  */
-};
-struct tm *gmtime_r(const time_t *timep, struct tm *result);
-size_t strftime(char *s, size_t max, const char *format, const struct tm *tm);
-
-struct timeval {
-	time_t      tv_sec;     /* seconds */
-	suseconds_t tv_usec;    /* microseconds */
-};
-struct timezone {
-	int tz_minuteswest;     /* minutes west of Greenwich */
-	int tz_dsttime;         /* type of DST correction */
-};
-int gettimeofday(struct timeval *tv, struct timezone *tz);
-]]
-
 local function unescape(s)
 	s = string.gsub(s,"+"," ")
 	return (string.gsub(s, "%%(%x%x)", function(hex)
@@ -40,24 +9,10 @@ local function unescape(s)
 	end))
 end
 
------------------------------------------------------------------------------
--- Parses a url and returns a table with all its parts according to RFC 2396
--- The following grammar describes the names given to the URL parts
 -- <url> ::= <scheme>://<authority>/<path>;<params>?<query>#<fragment>
 -- <authority> ::= <userinfo>@<host>:<port>
 -- <userinfo> ::= <user>[:<password>]
 -- <path> :: = {<segment>/}<segment>
--- Input
---   url: uniform resource locator of request
---   default: table with default values for each field
--- Returns
---   table with the following fields, where RFC naming conventions have
---   been preserved:
---     scheme, authority, userinfo, user, password, host, port,
---     path, params, query, fragment
--- Obs:
---   the leading '/' in {/<path>} is considered part of <path>
------------------------------------------------------------------------------
 local function parse_url(url, default)
 	-- initialize default parameters
 	local parsed = {}
@@ -334,21 +289,19 @@ local function do_servlet(req, rsp)
 	local sk = req.sock
 	local target_srv
 	local host = req.headers["host"]
-	for _,srv in ipairs(g_http_cfg) do
-		if string.find(srv.listen, sk.listen, 1, true) then
-			for _,h in pairs(srv.host) do
-				if h == host then
+	for _,srv in ipairs(g_http_cfg.srv_tbl[sk.srv_port][sk.srv_ip]) do
+		for _,h in pairs(srv.host) do
+			if h == host then
+				target_srv = srv
+				break
+			elseif h:sub(1,1) == "~" then
+				if string.find(host, h:sub(2)) then
 					target_srv = srv
 					break
-				elseif h:sub(1,1) == "~" then
-					if string.find(host, h:sub(2)) then
-						target_srv = srv
-						break
-					end
 				end
 			end
-			if not target_srv then target_srv = srv end
 		end
+		if not target_srv then target_srv = srv end
 	end
 
 	local servlet

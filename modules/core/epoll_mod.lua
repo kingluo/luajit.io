@@ -1,17 +1,23 @@
 local ffi = require("ffi")
 local bit = require("bit")
 
+if ffi.arch == "x86" then
 ffi.cdef[[
-typedef union epoll_data {
-	void *ptr;
-	int fd;
-	int	u32;
-	long u64;
+typedef unsigned int uint32_t;
+typedef unsigned long long int uint64_t;
+
+typedef union epoll_data
+{
+  void *ptr;
+  int fd;
+  uint32_t u32;
+  uint64_t u64;
 } epoll_data_t;
 
-struct epoll_event {
-	int	events;
-	epoll_data_t data;
+struct epoll_event
+{
+  uint32_t events;
+  epoll_data_t data;
 };
 
 int epoll_create(int size);
@@ -20,6 +26,9 @@ int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout)
 
 int getpid(void);
 ]]
+else
+error("arch not support: " .. ffi.arch)
+end
 
 local EPOLL_CTL_ADD=1
 local EPOLL_CTL_DEL=2
