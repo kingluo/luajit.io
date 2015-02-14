@@ -1,73 +1,44 @@
 require("core.base")
 local ffi = require("ffi")
 local tcp = require("socket.tcp_mod")
+local URI = require("uri")
+local uri_decode = require("uri._util").uri_decode
 
 local function unescape(s)
 	s = string.gsub(s,"+"," ")
-	return (string.gsub(s, "%%(%x%x)", function(hex)
-		return string.char(tonumber(hex, 16))
-	end))
+	return uri_decode(s)
 end
 
--- <url> ::= <scheme>://<authority>/<path>;<params>?<query>#<fragment>
--- <authority> ::= <userinfo>@<host>:<port>
--- <userinfo> ::= <user>[:<password>]
--- <path> :: = {<segment>/}<segment>
-local function parse_url(url, default)
-	-- initialize default parameters
-	local parsed = {}
-	for i,v in pairs(default or parsed) do parsed[i] = v end
-
-	-- get fragment
-	url = string.gsub(url, "#(.*)$", function(f)
-		parsed.fragment = f
-		return ""
-	end)
-
-	-- get scheme
-	url = string.gsub(url, "^([%w][%w%+%-%.]*)%:",
-		function(s) parsed.scheme = s; return "" end)
-
-	-- get authority
-	url = string.gsub(url, "^//([^/]*)", function(n)
-		parsed.authority = n
-		return ""
-	end)
-
-	-- get query string
-	url = string.gsub(url, "%?(.*)", function(q)
-		parsed.query = {}
-		for k,v in string.gmatch(q,"([^&=]+)=([^&=]+)") do
-			parsed.query[k] = unescape(v)
+local function parse_uri_args(query)
+	local uri_args = {}
+	local i = 0
+	local j = 0
+	local match
+	while true do
+		i,j,match = query:find("([^&]+)", j+1)
+		if not match then break end
+		local n = match
+		local v
+		local i = match:find("=",1,true)
+		if i then
+			n = match:sub(1,i-1)
+			v = match:sub(i+1)
 		end
-		return ""
-	end)
 
-	-- get params
-	url = string.gsub(url, "%;(.*)", function(p)
-		parsed.params = p
-		return ""
-	end)
+		n = unescape(n)
+		if v then v = unescape(v) end
+		v = v or true
 
-	-- path is whatever was left
-	if url ~= "" then parsed.path = unescape(url) end
-	local authority = parsed.authority
-	if not authority then return parsed end
-	authority = string.gsub(authority,"^([^@]*)@",
-		function(u) parsed.userinfo = u; return "" end)
-	authority = string.gsub(authority, ":([^:%]]*)$",
-		function(p) parsed.port = p; return "" end)
-	if authority ~= "" then
-		-- IPv6?
-		parsed.host = string.match(authority, "^%[(.+)%]$") or authority
+		if not uri_args[n] then
+			uri_args[n] = v
+		else
+			if type(uri_args[n]) ~= "table" then
+				uri_args[n] = {uri_args[n]}
+			end
+			table.insert(uri_args[n], v)
+		end
 	end
-	local userinfo = parsed.userinfo
-	if not userinfo then return parsed end
-	userinfo = string.gsub(userinfo, ":([^:]*)$",
-		function(p) parsed.password = p; return "" end)
-	parsed.user = userinfo
-
-	return parsed
+	return uri_args
 end
 
 local function receive_headers(sock, headers)
@@ -149,6 +120,23 @@ function http_req_mt.__index.read_body(self, sink)
 		receive_body(self.sock, self.headers, sink)
 		self.body_read = true
 	end
+end
+
+function http_req_mt.__index.get_uri_args(self)
+	if not self.uri_args then
+		self.uri_args = parse_uri_args(self.url:query())
+	end
+	return self.uri_args
+end
+
+function http_req_mt.__index.get_post_args(self)
+	if self.method ~= "POST" then return nil, "not POST" end
+	if not self.post_args then
+		receive_body(self.sock, self.headers, function(chunk)
+			self.post_args = parse_uri_args(chunk)
+		end)
+	end
+	return self.post_args
 end
 
 local status_tbl = {
@@ -285,70 +273,165 @@ end
 
 local g_http_cfg
 
+local function http_parse_conf(cf)
+	g_http_cfg = cf
+
+	for _,srv in ipairs(cf) do
+		srv.servlet_info = {exact_match={},plain={},pattern={}}
+		for _,servlet in ipairs(srv.servlet) do
+			if servlet[1] == "=" then
+				srv.servlet_info.exact_match[servlet[2]] = servlet
+			elseif servlet[1] == "^" or servlet[1] == "^~" then
+				table.insert(srv.servlet_info.plain, servlet)
+			else
+				table.insert(srv.servlet_info.pattern, servlet)
+			end
+		end
+	end
+
+	local function more_than(a,b)
+		return a.host > b.host
+	end
+
+	-- setup server_name hashes
+	for port,addresses in pairs(cf.srv_tbl) do
+		for address,srv_list in pairs(addresses) do
+			local extra_hash = {}
+			local prefix_hash = {}
+			local postfix_hash = {}
+			local pattern = {}
+			for _,srv in pairs(srv_list) do
+				for _,host in ipairs(srv.server_name) do
+					local prefix = host:sub(1,1)
+					local postfix = host:sub(#host)
+					if prefix == "~" then
+						table.insert(pattern, host:sub(2))
+					elseif prefix == "*" or prefix == "." then
+						host=host:sub((prefix == ".") and 2 or 3)
+						table.insert(prefix_hash,{host=host,srv=srv})
+						if prefix == "." then
+							extra_hash[host] = srv
+						end
+					elseif postfix == "*" then
+						table.insert(postfix_hash,{host=host:sub(1,#host-2),srv=srv})
+					else
+						extra_hash[host] = srv
+					end
+				end
+			end
+			srv_list.extra_hash = extra_hash
+			table.sort(prefix_hash, more_than)
+			srv_list.prefix_hash = prefix_hash
+			table.sort(postfix_hash, more_than)
+			srv_list.postfix_hash = postfix_hash
+			srv_list.server_pattern = pattern
+		end
+	end
+end
+
 local function do_servlet(req, rsp)
-	local sk = req.sock
-	local target_srv
-	local host = req.headers["host"]
-	for _,srv in ipairs(g_http_cfg.srv_tbl[sk.srv_port][sk.srv_ip]) do
-		for _,h in pairs(srv.host) do
-			if h == host then
-				target_srv = srv
-				break
-			elseif h:sub(1,1) == "~" then
-				if string.find(host, h:sub(2)) then
-					target_srv = srv
+	local match_srv
+	local host = req.headers["host"] or ""
+	local hlen = #host
+	local srv_list = g_http_cfg.srv_tbl[req.sock.srv_port][req.sock.srv_ip]
+		or g_http_cfg.srv_tbl[req.sock.srv_port]["*"]
+
+	if #srv_list > 1 then
+		-- exact name
+		match_srv = srv_list.extra_hash[host]
+
+		-- longest wildcard name starting with an asterisk, e.g. "*.example.org"
+		if not match_srv then
+			for _,v in ipairs(srv_list.prefix_hash) do
+				local i,j = host:find(v.host,1,true)
+				if j == hlen then
+					match_srv = v.srv
 					break
 				end
 			end
 		end
-		if not target_srv then target_srv = srv end
+
+		-- longest wildcard name ending with an asterisk, e.g. "mail.*"
+		if not match_srv then
+			for _,v in ipairs(srv_list.postfix_hash) do
+				local i,j = host:find(v.host,1,true)
+				if i == 1 then
+					match_srv = v.srv
+					break
+				end
+			end
+		end
+
+		-- first matching regular expression (in order of appearance in a configuration file)
+		if not match_srv then
+			for _,pat in ipairs(srv_list.server_pattern) do
+				if string.find(host, pat) then
+					match_srv = srv
+					break
+				end
+			end
+		end
+
+		if not match_srv then
+			match_srv = srv_list.default_server
+		end
+	end
+
+	if not match_srv then
+		match_srv = srv_list[1]
 	end
 
 	local servlet
-	if target_srv then
+	if match_srv then
 		local longest_n = 0
-		local path = req.url.path
-		local idx
+		local path = req.url:path()
 		local match_done = false
-		for i,slcf in ipairs(target_srv.servlet) do
-			local modifier,pat = slcf[1],slcf[2]
-			if modifier == "=" then
-				if path == pat then
-					idx = i
-					match_done = true
-					break
-				end
-			elseif modifier == "^" or modifier == "^~" then
-				local s,e = string.find(path, pat, 1, true)
-				if s and e > longest_n then
-					longest_n, idx, match_done = e, i, (modifier == "^~")
+		
+		-- exact match
+		servlet = match_srv.servlet_info.exact_match[path]
+		if servlet then match_done = true end
+
+		-- plain find
+		if not match_done then
+			for _,slcf in ipairs(match_srv.servlet_info.plain) do
+				local modifier,pat = slcf[1],slcf[2]
+				if modifier == "=" then
+					if path == pat then
+						servlet = slcf
+						match_done = true
+						break
+					end
+				elseif modifier == "^" or modifier == "^~" then
+					local s,e = string.find(path, pat, 1, true)
+					if s and e > longest_n then
+						servlet = slcf
+						longest_n, match_done = e, (modifier == "^~")
+					end
 				end
 			end
 		end
 
-		if match_done == true then
-			servlet = target_srv.servlet[idx]
-		else
-			for i,slcf in ipairs(target_srv.servlet) do
+		-- pattern match
+		if not match_done then
+			for _,slcf in ipairs(match_srv.servlet_info.pattern) do
 				local modifier,pat = slcf[1],slcf[2]
 				if modifier == "~" then
 					if string.find(path, pat) then
-						idx = i
+						servlet = slcf
 						break
 					end
 				elseif modifier == "~*" then
 					if string.find(string.lower(path), string.lower(pat)) then
-						idx = i
+						servlet = slcf
 						break
 					end
 				elseif modifier == "f"  then
 					if pat(req) then
-						idx = i
+						servlet = slcf
 						break
 					end
 				end
 			end
-			if idx then servlet = target_srv.servlet[idx] end
 		end
 	end
 
@@ -359,9 +442,9 @@ local function do_servlet(req, rsp)
 		if type(fn) == 'string' then
 			fn = require(fn)
 			assert(fn)
-			ret,err = fn.service(req,rsp,target_srv,extra)
+			ret,err = fn.service(req,rsp,match_srv,extra)
 		elseif type(fn) == 'function' then
-			ret,err = fn(req,rsp,target_srv,extra)
+			ret,err = fn(req,rsp,match_srv,extra)
 		end
 		if not err then
 			rsp:flush()
@@ -382,10 +465,11 @@ local function http_request_handler(sock)
 	while true do
 		local line,err = sock:receive()
 		if err then print(err); break end
-		local method,url,ver = string.match(line, "(.*) (.*) HTTP/(%d%.%d)")
-		url = parse_url(url)
+		local method,url,ver = line:match("(.*) (.*) HTTP/(%d%.%d)")
+		local uri = URI:new(url)
+		uri._path = unescape(uri._path)
 		local headers = receive_headers(sock)
-		local req = http_req_new(method, url, headers, sock)
+		local req = http_req_new(method, uri, headers, sock)
 		local rsp = http_rsp_new(req, sock)
 		local success = do_servlet(req, rsp)
 		if (success == false) or headers["connection"] == "close" then
@@ -395,8 +479,7 @@ local function http_request_handler(sock)
 end
 
 local function run(cfg)
-	g_http_cfg = cfg
-	return tcp(cfg, http_request_handler)
+	return tcp(cfg, http_parse_conf, http_request_handler)
 end
 
 return run

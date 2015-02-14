@@ -40,6 +40,7 @@ int listen(int sockfd, int backlog);
 int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen);
 int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen);
+int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 ]]
 else
 error("arch not support: " .. ffi.arch)

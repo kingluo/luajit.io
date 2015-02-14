@@ -426,7 +426,12 @@ function tcp_mt.__index.accept(self)
 	local sock = tcp_new(cfd)
 	sock.ip = ip
 	sock.port = port
-	sock.srv_ip = self.ip
+	if self.ip == "*" then
+		assert(ffi.C.getsockname(cfd, ffi.cast("struct sockaddr *",addr), len) == 0)
+		sock.srv_ip = ffi.string(ffi.C.inet_ntoa(addr[0].sin_addr))
+	else
+		sock.srv_ip = self.ip
+	end
 	sock.srv_port = self.port
 	ep.add_event(sock.ev, ep.EPOLLIN, ep.EPOLLRDHUP, ep.EPOLLET)
 	return sock
@@ -600,50 +605,58 @@ local g_tcp_cfg
 local function tcp_parse_conf(cf)
 	g_tcp_cfg = cf
 	local srv_tbl = {}
-	g_tcp_cfg.srv_tbl = srv_tbl
+	cf.srv_tbl = srv_tbl
 
 	for _,srv in ipairs(g_tcp_cfg) do
-		for ip,port in string.gmatch(srv.listen, "([%d%.%*]+):(%d+)") do
+		if not srv.listen then
+			srv.listen = {
+				{address="*", port=80},
+				{address="*", port=8080},
+			}
+		end
+		for _,linfo in ipairs(srv.listen) do
+			local port = linfo.port
+			if not linfo.address then linfo.address = "*" end
+			local address = linfo.address
+
 			if not srv_tbl[port] then srv_tbl[port] = {} end
-			if ip == "*" then
-				if not srv_tbl[port]["*"] then
-					srv_tbl[port] = {["*"] = {srv}}
-				else
-					table.insert(srv_tbl[port]["*"], srv)
+
+			if not srv_tbl[port][address] then
+				srv_tbl[port][address] = {}
+				if linfo.default_server then
+					srv_tbl[port][address]["default_server"] = srv
 				end
-			elseif not srv_tbl[port]["*"] then
-				if not srv_tbl[port][ip] then
-					srv_tbl[port][ip] = {}
-				end
-				table.insert(srv_tbl[port][ip], srv)
 			end
+			table.insert(srv_tbl[port][address], srv)
 		end
 	end
 
-	for port,ip_set in pairs(srv_tbl) do
-		for ip,_ in pairs(ip_set) do
+	-- setup all listen sockets
+	for port,addresses in pairs(srv_tbl) do
+		if addresses["*"] then
 			local ssock = tcp_new()
-			local r,err = ssock:bind(ip, port)
+			local r,err = ssock:bind("*", port)
 			if err then error(err) end
 			g_listen_sk_tbl[ssock.fd] = ssock
+		else
+			for address,_ in pairs(addresses) do
+				local ssock = tcp_new()
+				local r,err = ssock:bind(address, port)
+				if err then error(err) end
+				g_listen_sk_tbl[ssock.fd] = ssock
+			end
 		end
 	end
 end
 
 local function tcp_handler(sock)
-	for _,srv in ipairs(g_tcp_cfg) do
-		if string.find(srv.listen, sock.listen, 1, true) then
-			local handler = srv.handler
-			assert(handler)
-			local typ = type(handler)
-			if typ == "string" then
-				return (assert(require(handler))).service(srv)
-			elseif type == "function" then
-				return handler(srv)
-			end
-		end
+	local srv = g_tcp_cfg.srv_tbl[sock.srv_port][sock.srv_ip]
+		or g_tcp_cfg.srv_tbl[sock.srv_port]["*"][1]
+	if type(fn) == 'string' then
+		return (require(fn)).service(srv)
+	elseif type(fn) == 'function' then
+		return fn(srv)
 	end
-	error("no handler")
 end
 
 local function do_all_listen_sk(func)
@@ -652,9 +665,10 @@ local function do_all_listen_sk(func)
 	end
 end
 
-local function run(cfg, overwrite_handler)
+local function run(cfg, parse_conf, overwrite_handler)
 	local conn_handler = overwrite_handler or tcp_handler
 	tcp_parse_conf(cfg)
+	if parse_conf then parse_conf(cfg) end
 
 	local worker_processes = g_tcp_cfg.worker_processes
 	local sigchld_handler = function(siginfo)
@@ -686,11 +700,7 @@ local function run(cfg, overwrite_handler)
 						wait_listen_sk = false
 					end
 					co.spawn(
-						function()
-							local r1,r2 = pcall(function() return conn_handler(sock) end)
-							if r1 == false then print(r2); os.exit(1) end
-							return r2
-						end,
+						conn_handler,
 						function()
 							print("child pid=" .. ffi.C.getpid() .. " remove connection, cfd=" .. sock.fd)
 							sock:close()
@@ -700,7 +710,8 @@ local function run(cfg, overwrite_handler)
 								do_all_listen_sk(function(ssock) ep.add_event(ssock.ev, ep.EPOLLIN) end)
 								wait_listen_sk = true
 							end
-						end
+						end,
+						sock
 					)
 				else
 					print("child pid=" .. ffi.C.getpid() .. " accept error: " .. err)

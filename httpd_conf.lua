@@ -10,10 +10,12 @@ http {
 	worker_connections = 2,
 	-- server blocks
 	{
-		listen = "*:8080",
-		-- if host prefixed by "~", denotes regular pattern matching
+		listen = {
+			{port=8080,default_server=1}
+		},
+		-- if server_name prefixed by "~", denotes regular pattern matching
 		-- otherwise, do exact compare
-		host = {"example.com", "~.*%.example%.com"},
+		server_name = {"example.org", "*.example.com"},
 		root = "/srv/luajit.io/",
 		default_type = 'text/plain',
 		servlet = {
@@ -41,8 +43,12 @@ http {
 		}
 	},
 	{
-		listen = "127.0.0.1:8080; *:9090; 127.0.0.1:10000",
-		host = {"example.net"},
+		listen = {
+			{address="127.0.0.1", port=8080},
+			{port=9090},
+			{adddress="127.0.0.1", port=10000}
+		},
+		server_name = {"example.net"},
 		root = "./foorbar",
 		default_type = 'text/plain',
 		servlet = {

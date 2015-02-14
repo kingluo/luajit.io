@@ -27,7 +27,9 @@ local function co_resume(co, ...)
 		return false,"coroutine already killed"
 	end
 
-	local r,flag,data = coroutine.resume(co, ...)
+	local cr,r,flag,data = coroutine.resume(co, ...)
+	if cr == false then error(r) end
+
 	if coroutine.status(co) == "dead" then
 		-- call gc first
 		local gc = cinfo.gc
@@ -79,7 +81,7 @@ local function co_yield(...)
 	return coroutine.yield(...)
 end
 
-local function co_spawn(fn, gc)
+local function co_spawn(fn, gc, ...)
 	local parent = coroutine.running()
 	local co = coroutine.create(function(...)
 		-- make sandbox
@@ -94,7 +96,7 @@ local function co_spawn(fn, gc)
 		childs=setmetatable({},{__mode="k"}),
 		exit_childs=setmetatable({},{__mode="k"})}
 	if parent then co_info[parent].childs[co] = 1 end
-	co_resume(co)
+	co_resume(co, ...)
 	return co
 end
 
