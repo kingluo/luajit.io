@@ -58,24 +58,24 @@ local function lux_compile(str,env)
 	return fn()
 end
 
-local function service(req, rsp, cf)
-	if not lux_cache[req.url.path] then
-		local path = (cf.root or ".") .. '/' .. req.url.path
-		local f = io.open(path)
+local function service(req, rsp, srvcfg, lcf)
+	local path = req.url:path()
+	if not lux_cache[path] then
+		local fpath = {(srvcfg.root or "."), "", path}
+		if lcf.path then fpath[2] = lcf.path end
+		fpath = table.concat(fpath, "/")
+		local f = io.open(fpath)
 		assert(f)
 		local str = f:read('*a')
 		assert(str)
-		lux_cache[req.url.path] = lux_compile(str, {_parent=_G})
+		lux_cache[path] = lux_compile(str, {_parent=_G})
 	end
 
-	local fn = lux_cache[req.url.path]
-	local ret,err = pcall(function()
-		fn(req, rsp, function(s) rsp:say(s) end)
-	end)
+	local fn = lux_cache[path]
+	local ret,err = pcall(fn, req, rsp, function(s) rsp:say(s) end)
 	if ret == false then
 		return nil,err
 	end
-	return 1
 end
 
-return {service = service}
+return service

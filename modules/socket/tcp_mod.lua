@@ -34,12 +34,6 @@ local pools = {}
 
 local YIELD_R = "co_r"
 local YIELD_W = "co_w"
-local function sock_yield(sock, rw)
-	if sock[rw] then return "sock waiting" end
-	sock[rw] = coroutine.running()
-	co.yield()
-	sock[rw] = nil
-end
 
 local function sock_io_handler(ev, events)
 	local sock = ev.sock
@@ -87,6 +81,13 @@ local function tcp_new(fd)
 	local sock = setmetatable({fd=fd, ev=ev, guard=utils.fd_guard(fd)}, tcp_mt)
 	ev.sock = sock
 	return sock
+end
+
+function tcp_mt.__index.yield(self, rw)
+	if self[rw] then return "sock waiting" end
+	self[rw] = coroutine.running()
+	co.yield()
+	self[rw] = nil
 end
 
 function tcp_mt.__index.close(self)
@@ -194,7 +195,7 @@ local function receive_ll(self, pattern, rlen, options)
 				self:close()
 				err = "socket closed"
 			elseif errno == EAGAIN then
-				sock_yield(self, YIELD_R)
+				self:yield(YIELD_R)
 			elseif errno ~= EINTR then
 				self:close()
 				err = utils.strerror(errno)
@@ -258,7 +259,8 @@ local function flatten_table(self, data, idx, bytes)
 
 	for i,v in ipairs(data) do
 		local typ = type(v)
-		if typ == "string" then
+		if typ ~= "table" then
+			if typ ~= "string" then v = tostring(v) end
 			if idx == self.iovec_len then
 				-- realloc the iovec array
 				self.iovec_len = self.iovec_len + MAX_IOVCNT
@@ -271,11 +273,9 @@ local function flatten_table(self, data, idx, bytes)
 			iovec[idx].iov_len = len
 			bytes = bytes + len
 			idx = idx + 1
-		elseif typ == "table" then
+		else
 			idx, bytes = flatten_table(self, v, idx, bytes)
 			if idx == nil then return nil end
-		else
-			return nil
 		end
 	end
 
@@ -348,7 +348,7 @@ local function send_ll(self, ...)
 			end
 		elseif errno == EAGAIN then
 			ep.add_event(self.ev, ep.EPOLLOUT)
-			sock_yield(self, YIELD_W)
+			self:yield(YIELD_W)
 			ep.del_event(self.ev, ep.EPOLLOUT)
 		elseif errno ~= EINTR then
 			self:close()
@@ -526,7 +526,7 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 		self.resolve_key = dns.resolve(host, port, function(ip, port)
 			co.resume(self[YIELD_W], ip, port)
 		end)
-		host, port = sock_yield(self, YIELD_W)
+		host, port = self:yield(YIELD_W)
 		local err
 		if self.wtimedout then
 			dns.cancel_resolve(self.resolve_key)
@@ -561,7 +561,7 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 		if ret == 0 then break end
 		if errno == EINPROGRESS then
 			ep.add_event(self.ev, ep.EPOLLOUT, ep.EPOLLIN, ep.EPOLLRDHUP, ep.EPOLLET)
-			sock_yield(self, YIELD_W)
+			self:yield(YIELD_W)
 			ep.del_event(self.ev, ep.EPOLLOUT)
 			if self.wtimedout then
 				err = "timeout"
@@ -607,12 +607,9 @@ local function tcp_parse_conf(cf)
 	local srv_tbl = {}
 	cf.srv_tbl = srv_tbl
 
-	for _,srv in ipairs(g_tcp_cfg) do
+	for _,srv in ipairs(cf) do
 		if not srv.listen then
-			srv.listen = {
-				{address="*", port=80},
-				{address="*", port=8080},
-			}
+			srv.listen = {{address="*", port=80}}
 		end
 		for _,linfo in ipairs(srv.listen) do
 			local port = linfo.port
@@ -650,12 +647,14 @@ local function tcp_parse_conf(cf)
 end
 
 local function tcp_handler(sock)
-	local srv = g_tcp_cfg.srv_tbl[sock.srv_port][sock.srv_ip]
-		or g_tcp_cfg.srv_tbl[sock.srv_port]["*"][1]
-	if type(fn) == 'string' then
-		return (require(fn)).service(srv)
-	elseif type(fn) == 'function' then
-		return fn(srv)
+	local srv_list = g_tcp_cfg.srv_tbl[sock.srv_port][sock.srv_ip]
+		or g_tcp_cfg.srv_tbl[sock.srv_port]["*"]
+	local srv = srv_list[1]
+	local handler = srv.handler
+	if type(handler) == 'string' then
+		return require(handler).service(srv)
+	elseif type(handler) == 'function' then
+		return handler(srv)
 	end
 end
 

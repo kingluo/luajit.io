@@ -293,38 +293,33 @@ local function http_parse_conf(cf)
 		return a.host > b.host
 	end
 
-	-- setup server_name hashes
 	for port,addresses in pairs(cf.srv_tbl) do
 		for address,srv_list in pairs(addresses) do
-			local extra_hash = {}
-			local prefix_hash = {}
-			local postfix_hash = {}
-			local pattern = {}
-			for _,srv in pairs(srv_list) do
+			srv_list.extra_hash = {}
+			srv_list.prefix_hash = {}
+			srv_list.postfix_hash = {}
+			srv_list.pattern = {}
+			for _,srv in ipairs(srv_list) do
 				for _,host in ipairs(srv.server_name) do
 					local prefix = host:sub(1,1)
 					local postfix = host:sub(#host)
 					if prefix == "~" then
-						table.insert(pattern, host:sub(2))
+						table.insert(srv_list.pattern, {host=host:sub(2),srv=srv})
 					elseif prefix == "*" or prefix == "." then
-						host=host:sub((prefix == ".") and 2 or 3)
-						table.insert(prefix_hash,{host=host,srv=srv})
+						host = host:sub((prefix == ".") and 2 or 3)
+						table.insert(srv_list.prefix_hash,{host=host,srv=srv})
 						if prefix == "." then
-							extra_hash[host] = srv
+							srv_list.extra_hash[host] = srv
 						end
 					elseif postfix == "*" then
-						table.insert(postfix_hash,{host=host:sub(1,#host-2),srv=srv})
+						table.insert(srv_list.postfix_hash,{host=host:sub(1,#host-2),srv=srv})
 					else
-						extra_hash[host] = srv
+						srv_list.extra_hash[host] = srv
 					end
 				end
 			end
-			srv_list.extra_hash = extra_hash
-			table.sort(prefix_hash, more_than)
-			srv_list.prefix_hash = prefix_hash
-			table.sort(postfix_hash, more_than)
-			srv_list.postfix_hash = postfix_hash
-			srv_list.server_pattern = pattern
+			table.sort(srv_list.prefix_hash, more_than)
+			table.sort(srv_list.postfix_hash, more_than)
 		end
 	end
 end
@@ -364,9 +359,9 @@ local function do_servlet(req, rsp)
 
 		-- first matching regular expression (in order of appearance in a configuration file)
 		if not match_srv then
-			for _,pat in ipairs(srv_list.server_pattern) do
-				if string.find(host, pat) then
-					match_srv = srv
+			for _,v in ipairs(srv_list.pattern) do
+				if string.find(host, v.host) then
+					match_srv = v.srv
 					break
 				end
 			end
@@ -383,10 +378,9 @@ local function do_servlet(req, rsp)
 
 	local servlet
 	if match_srv then
-		local longest_n = 0
 		local path = req.url:path()
 		local match_done = false
-		
+
 		-- exact match
 		servlet = match_srv.servlet_info.exact_match[path]
 		if servlet then match_done = true end
@@ -395,18 +389,11 @@ local function do_servlet(req, rsp)
 		if not match_done then
 			for _,slcf in ipairs(match_srv.servlet_info.plain) do
 				local modifier,pat = slcf[1],slcf[2]
-				if modifier == "=" then
-					if path == pat then
-						servlet = slcf
-						match_done = true
-						break
-					end
-				elseif modifier == "^" or modifier == "^~" then
-					local s,e = string.find(path, pat, 1, true)
-					if s and e > longest_n then
-						servlet = slcf
-						longest_n, match_done = e, (modifier == "^~")
-					end
+				local s = string.find(path, pat, 1, true)
+				if s then
+					servlet = slcf
+					match_done = (modifier == "^~")
+					break
 				end
 			end
 		end
@@ -437,15 +424,12 @@ local function do_servlet(req, rsp)
 
 	if servlet then
 		local fn = servlet[3]
-		local extra = servlet[4]
 		local ret, err
 		if type(fn) == 'string' then
 			fn = require(fn)
-			assert(fn)
-			ret,err = fn.service(req,rsp,match_srv,extra)
-		elseif type(fn) == 'function' then
-			ret,err = fn(req,rsp,match_srv,extra)
 		end
+		assert(type(fn) == 'function')
+		ret,err = fn(req,rsp,match_srv,servlet)
 		if not err then
 			rsp:flush()
 			if rsp.headers["transfer-encoding"] == "chunked" then
@@ -467,7 +451,11 @@ local function http_request_handler(sock)
 		if err then print(err); break end
 		local method,url,ver = line:match("(.*) (.*) HTTP/(%d%.%d)")
 		local uri = URI:new(url)
-		uri._path = unescape(uri._path)
+		if uri._path == "" then
+			uri._path = "/"
+		else
+			uri._path = unescape(uri._path)
+		end
 		local headers = receive_headers(sock)
 		local req = http_req_new(method, uri, headers, sock)
 		local rsp = http_rsp_new(req, sock)

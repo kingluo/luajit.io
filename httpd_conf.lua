@@ -1,58 +1,51 @@
-package.path = package.path .. ';./modules/?.lua;./modules/?/init.lua;/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua'
-package.cpath = package.cpath .. ';./modules/?.so'
+package.path = package.path .. ";./modules/?.lua;./modules/?/init.lua;./modules/http/?.lua"
+	.. ";/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua"
+package.cpath = package.cpath .. ";./modules/?.so"
 
 require("pl.strict")
 
-local http = require("http")
-
-http {
+require("http") {
 	worker_processes = 1,
 	worker_connections = 2,
-	-- server blocks
+	-- Server blocks
+	-- See http://nginx.org/en/docs/http/request_processing.html
 	{
 		listen = {
 			{port=8080,default_server=1}
 		},
-		-- if server_name prefixed by "~", denotes regular pattern matching
-		-- otherwise, do exact compare
-		server_name = {"example.org", "*.example.com"},
-		root = "/srv/luajit.io/",
+		server_name = {"example.org", "*.example.com", "~my%d+web%.org"},
+		root = "/srv/myserver",
 		default_type = 'text/plain',
 		servlet = {
-			-- same match rule as Nginx location directive
-			-- see http://nginx.org/en/docs/http/ngx_http_core_module.html#location
+			-- See nginx location directive:
+			-- http://nginx.org/en/docs/http/ngx_http_core_module.html#location
 			-- Add two new modifiers:
 			-- "^" explicitly denotes longest prefix matching
 			-- "f" denotes matching function
-			-- {<Nginx-style modifier> (<url match pattern>|<match function>), (<module name>|<servlet function>)}, [<extra>]
+			-- {<modifier>, (<url match pattern> | <match function>), (<module name> | <inline function>), ...}
 			{"=", "/test2", "test_mod"},
 			{"^", "/foobar", "foobar_mod"},
-			{"~", "%.lux$", "lux_mod"},
-			{"^~", "/files/", "static_mod"},
+			{"~", "%.lux$", "lux_mod", path="WEB-INF/lux/"},
+			{"^~", "/static/", "static_mod"},
 			{
 				"f",
 				function(req)
-					return true
+					return req.headers["user-agent"]:find("curl")
 				end,
-				function(...)
-					local test = require("test_mod")
-					return test.service(...)
-				end,
-				{foo=1,bar="hello"}
+				"test_mod"
 			},
 		}
 	},
 	{
 		listen = {
 			{address="127.0.0.1", port=8080},
-			{port=9090},
-			{adddress="127.0.0.1", port=10000}
+			{address="127.0.0.1", port=10000}
 		},
 		server_name = {"example.net"},
-		root = "./foorbar",
+		root = "/srv/foorbar",
 		default_type = 'text/plain',
 		servlet = {
-			{"^", "/static/files/", "static_mod"}
+			{"^~", "/static/", "static_mod"}
 		}
 	},
 }

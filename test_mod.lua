@@ -116,6 +116,4 @@ local function service(req, rsp, cf, extra)
 	return rsp:say("hello world, conf ok!\n")
 end
 
-return {
-	service = service,
-}
+return service
