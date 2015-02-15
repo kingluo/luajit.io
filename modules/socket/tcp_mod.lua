@@ -1,5 +1,4 @@
-require("core.base")
-require("socket.base")
+local C = require("cdef")
 local ffi = require("ffi")
 local ep = require("core.epoll_mod")
 local timer = require("core.timer_mod")
@@ -7,20 +6,6 @@ local co = require("core.co_mod")
 local utils = require("core.utils_mod")
 local signal = require("core.signal_mod")
 local dns = require("socket.dns_mod")
-
-local AF_INET=2
-local SOCKET_STREAM=1
-local SOL_SOCKET=1
-local SO_REUSEADDR=2
-local SO_ERROR = 4
-local IPPROTO_TCP=6
-
-local SIGCHLD=17
-local SIGPIPE=13
-
-local EAGAIN = 11
-local EINTR = 4
-local EINPROGRESS = 115
 
 local READ_ALL = 1
 local READ_LINE = 2
@@ -39,15 +24,15 @@ local function sock_io_handler(ev, events)
 	local sock = ev.sock
 	assert(sock)
 
-	if bit.band(events, ep.EPOLLIN) ~= 0 then
+	if bit.band(events, C.EPOLLIN) ~= 0 then
 		if sock[YIELD_R] then
 			co.resume(sock[YIELD_R])
 		end
-	elseif bit.band(events, ep.EPOLLOUT) ~= 0 then
+	elseif bit.band(events, C.EPOLLOUT) ~= 0 then
 		if sock[YIELD_W] then
 			co.resume(sock[YIELD_W])
 		end
-	elseif bit.band(events, ep.EPOLLRDHUP) ~= 0 then
+	elseif bit.band(events, C.EPOLLRDHUP) ~= 0 then
 		if sock[YIELD_R] then
 			co.resume(sock[YIELD_R])
 			return
@@ -92,7 +77,7 @@ end
 
 function tcp_mt.__index.close(self)
 	if not self.closed then
-		ffi.C.close(self.fd)
+		C.close(self.fd)
 		self.guard.fd = -1
 		self.closed = true
 	else
@@ -185,7 +170,7 @@ local function receive_ll(self, pattern, rlen, options)
 			end
 
 			local err
-			local len = ffi.C.read(self.fd, self.rbuf_c, MAX_RBUF_LEN)
+			local len = C.read(self.fd, self.rbuf_c, MAX_RBUF_LEN)
 			local errno = ffi.errno()
 
 			if len > 0 then
@@ -327,7 +312,7 @@ local function send_ll(self, ...)
 		end
 		local iovcnt = n_iovec % MAX_IOVCNT
 		if iovcnt == 0 then iovcnt = MAX_IOVCNT end
-		local len = ffi.C.writev(self.fd, iovec[idx], iovcnt)
+		local len = C.writev(self.fd, iovec[idx], iovcnt)
 		local errno = ffi.errno()
 		if len > 0 then
 			sent = sent + len
@@ -347,9 +332,9 @@ local function send_ll(self, ...)
 				end
 			end
 		elseif errno == EAGAIN then
-			ep.add_event(self.ev, ep.EPOLLOUT)
+			ep.add_event(self.ev, C.EPOLLOUT)
 			self:yield(YIELD_W)
-			ep.del_event(self.ev, ep.EPOLLOUT)
+			ep.del_event(self.ev, C.EPOLLOUT)
 		elseif errno ~= EINTR then
 			self:close()
 			return nil, utils.strerror(errno)
@@ -382,7 +367,7 @@ end
 
 local function create_tcp_socket(self)
 	assert(self.fd == -1)
-	local fd = ffi.C.socket(AF_INET, SOCKET_STREAM, 0)
+	local fd = C.socket(C.AF_INET, C.SOCKET_STREAM, 0)
 	assert(fd > 0)
 	utils.set_nonblock(fd)
 	self.fd = fd
@@ -393,12 +378,12 @@ end
 function tcp_mt.__index.bind(self, ip, port)
 	create_tcp_socket(self)
 	local option = ffi.new("int[1]", 1)
-	assert(ffi.C.setsockopt(self.fd, SOL_SOCKET, SO_REUSEADDR, ffi.cast("void*",option), ffi.sizeof("int")) == 0)
+	assert(C.setsockopt(self.fd, C.SOL_SOCKET, C.SO_REUSEADDR, ffi.cast("void*",option), ffi.sizeof("int")) == 0)
 	local addr = ffi.new("struct sockaddr_in")
-	addr.sin_family = AF_INET
-	addr.sin_port = ffi.C.htons(tonumber(port))
-	ffi.C.inet_aton(ip, addr.sin_addr)
-	if ffi.C.bind(self.fd, ffi.cast("struct sockaddr*",addr), ffi.sizeof(addr)) == -1 then
+	addr.sin_family = C.AF_INET
+	addr.sin_port = C.htons(tonumber(port))
+	C.inet_aton(ip, addr.sin_addr)
+	if C.bind(self.fd, ffi.cast("struct sockaddr*",addr), ffi.sizeof(addr)) == -1 then
 		return nil, utils.strerror()
 	end
 	self.ip = ip
@@ -408,32 +393,32 @@ end
 
 function tcp_mt.__index.listen(self, backlog, handler)
 	backlog = backlog or 1000
-	local ret = ffi.C.listen(self.fd, backlog)
+	local ret = C.listen(self.fd, backlog)
 	if ret ~= 0 then return nil, utils.strerror() end
 	self.ev.handler = handler
-	ep.add_event(self.ev, ep.EPOLLIN)
+	ep.add_event(self.ev, C.EPOLLIN)
 	return 1
 end
 
 function tcp_mt.__index.accept(self)
 	local addr = ffi.new("struct sockaddr_in[1]")
 	local len = ffi.new("unsigned int[1]", ffi.sizeof(addr))
-	local cfd = ffi.C.accept(self.fd, ffi.cast("struct sockaddr *",addr), len)
+	local cfd = C.accept(self.fd, ffi.cast("struct sockaddr *",addr), len)
 	if cfd <= 0 then return nil, utils.strerror() end
-	local val = ffi.cast("unsigned short",ffi.C.ntohs(addr[0].sin_port))
+	local val = ffi.cast("unsigned short",C.ntohs(addr[0].sin_port))
 	local port = tonumber(val)
-	local ip = ffi.string(ffi.C.inet_ntoa(addr[0].sin_addr))
+	local ip = ffi.string(C.inet_ntoa(addr[0].sin_addr))
 	local sock = tcp_new(cfd)
 	sock.ip = ip
 	sock.port = port
 	if self.ip == "*" then
-		assert(ffi.C.getsockname(cfd, ffi.cast("struct sockaddr *",addr), len) == 0)
-		sock.srv_ip = ffi.string(ffi.C.inet_ntoa(addr[0].sin_addr))
+		assert(C.getsockname(cfd, ffi.cast("struct sockaddr *",addr), len) == 0)
+		sock.srv_ip = ffi.string(C.inet_ntoa(addr[0].sin_addr))
 	else
 		sock.srv_ip = self.ip
 	end
 	sock.srv_port = self.port
-	ep.add_event(sock.ev, ep.EPOLLIN, ep.EPOLLRDHUP, ep.EPOLLET)
+	ep.add_event(sock.ev, C.EPOLLIN, C.EPOLLRDHUP, C.EPOLLET)
 	return sock
 end
 
@@ -552,24 +537,24 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 	self.ip = host
 	self.port = port
 	local addr = ffi.new("struct sockaddr_in")
-	addr.sin_family = AF_INET
-	addr.sin_port = ffi.C.htons(tonumber(port))
-	ffi.C.inet_aton(host, addr.sin_addr)
+	addr.sin_family = C.AF_INET
+	addr.sin_port = C.htons(tonumber(port))
+	C.inet_aton(host, addr.sin_addr)
 	while true do
-		local ret = ffi.C.connect(self.fd, ffi.cast("struct sockaddr*",addr), ffi.sizeof(addr))
+		local ret = C.connect(self.fd, ffi.cast("struct sockaddr*",addr), ffi.sizeof(addr))
 		local errno = ffi.errno()
 		if ret == 0 then break end
 		if errno == EINPROGRESS then
-			ep.add_event(self.ev, ep.EPOLLOUT, ep.EPOLLIN, ep.EPOLLRDHUP, ep.EPOLLET)
+			ep.add_event(self.ev, C.EPOLLOUT, C.EPOLLIN, C.EPOLLRDHUP, C.EPOLLET)
 			self:yield(YIELD_W)
-			ep.del_event(self.ev, ep.EPOLLOUT)
+			ep.del_event(self.ev, C.EPOLLOUT)
 			if self.wtimedout then
 				err = "timeout"
 				break
 			end
 			local option = ffi.new("int[1]", 1)
 			local len = ffi.new("int[1]", 1)
-			assert(ffi.C.getsockopt(self.fd, SOL_SOCKET, SO_ERROR, ffi.cast("void*",option), len) == 0)
+			assert(C.getsockopt(self.fd, C.SOL_SOCKET, C.SO_ERROR, ffi.cast("void*",option), len) == 0)
 			if option[0] ~= 0 then
 				err = utils.strerror(err)
 			end
@@ -674,16 +659,16 @@ local function run(cfg, parse_conf, overwrite_handler)
 		print ("> child exit with pid=" .. siginfo.ssi_pid .. ", status=" .. siginfo.ssi_status)
 		worker_processes = worker_processes - 1
 	end
-	signal.add_signal_handler(SIGCHLD, sigchld_handler)
+	signal.add_signal_handler(C.SIGCHLD, sigchld_handler)
 
 	-- avoid crash triggered by SIGPIPE
-	signal.ignore_signal(SIGPIPE)
+	signal.ignore_signal(C.SIGPIPE)
 
 	for i=1,worker_processes do
-		local pid = ffi.C.fork()
+		local pid = C.fork()
 		if pid == 0 then
-			print("child pid=" .. ffi.C.getpid() .. " enter")
-			signal.del_signal_handler(SIGCHLD, sigchld_handler)
+			print("child pid=" .. C.getpid() .. " enter")
+			signal.del_signal_handler(C.SIGCHLD, sigchld_handler)
 
 			local connections = 0
 			local wait_listen_sk = false
@@ -691,29 +676,29 @@ local function run(cfg, parse_conf, overwrite_handler)
 			local ssock_handler = function(ev)
 				local sock,err = ev.sock:accept()
 				if sock then
-					print("child pid=" .. ffi.C.getpid() .. " get new connection, cfd=" .. sock.fd .. ", port=" .. sock.port)
+					print("child pid=" .. C.getpid() .. " get new connection, cfd=" .. sock.fd .. ", port=" .. sock.port)
 					connections = connections + 1
 					if connections >= g_tcp_cfg.worker_connections then
-						print("child pid=" .. ffi.C.getpid() .. " unlisten sk")
+						print("child pid=" .. C.getpid() .. " unlisten sk")
 						do_all_listen_sk(function(ssock) ep.del_event(ssock.ev) end)
 						wait_listen_sk = false
 					end
 					co.spawn(
 						conn_handler,
 						function()
-							print("child pid=" .. ffi.C.getpid() .. " remove connection, cfd=" .. sock.fd)
+							print("child pid=" .. C.getpid() .. " remove connection, cfd=" .. sock.fd)
 							sock:close()
 							connections = connections - 1
 							if (not wait_listen_sk) and connections < g_tcp_cfg.worker_connections then
-								print("child pid=" .. ffi.C.getpid() .. " listen sk")
-								do_all_listen_sk(function(ssock) ep.add_event(ssock.ev, ep.EPOLLIN) end)
+								print("child pid=" .. C.getpid() .. " listen sk")
+								do_all_listen_sk(function(ssock) ep.add_event(ssock.ev, C.EPOLLIN) end)
 								wait_listen_sk = true
 							end
 						end,
 						sock
 					)
 				else
-					print("child pid=" .. ffi.C.getpid() .. " accept error: " .. err)
+					print("child pid=" .. C.getpid() .. " accept error: " .. err)
 				end
 			end
 
@@ -735,7 +720,7 @@ local function run(cfg, parse_conf, overwrite_handler)
 
 			-- run the event loop
 			ep.run()
-			print("child pid=" .. ffi.C.getpid() .. " exit")
+			print("child pid=" .. C.getpid() .. " exit")
 			os.exit(0)
 		end
 	end

@@ -41,6 +41,72 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen);
 int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen);
 int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+
+struct addrinfo
+{
+  int ai_flags;
+  int ai_family;
+  int ai_socktype;
+  int ai_protocol;
+  socklen_t ai_addrlen;
+  struct sockaddr *ai_addr;
+  char *ai_canonname;
+  struct addrinfo *ai_next;
+};
+
+typedef int __pid_t;
+typedef union sigval
+  {
+    int sival_int;
+    void *sival_ptr;
+  } sigval_t;
+typedef struct sigevent
+  {
+    sigval_t sigev_value;
+    int sigev_signo;
+    int sigev_notify;
+
+    union
+      {
+ int _pad[((64 / sizeof (int)) - 3)];
+
+
+
+ __pid_t _tid;
+
+ struct
+   {
+     void (*_function) (sigval_t);
+     void *_attribute;
+   } _sigev_thread;
+      } _sigev_un;
+  } sigevent_t;
+
+struct gaicb
+{
+  const char *ar_name;
+  const char *ar_service;
+  const struct addrinfo *ar_request;
+  struct addrinfo *ar_result;
+
+  int __return;
+  int __unused[5];
+};
+void freeaddrinfo(struct addrinfo *res);
+int getaddrinfo_a(int mode, struct gaicb *list[],
+	   int nitems, struct sigevent *sevp);
+int gai_error(struct gaicb *req);
+int gai_cancel(struct gaicb *req);
+
+///////// constants
+
+static const int AF_INET=2;
+static const int SOCKET_STREAM=1;
+static const int SOL_SOCKET=1;
+static const int SO_REUSEADDR=2;
+static const int SO_ERROR = 4;
+static const int IPPROTO_TCP=6;
+static const int TCP_CORK = 3;
 ]]
 else
 error("arch not support: " .. ffi.arch)

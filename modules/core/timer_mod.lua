@@ -1,40 +1,8 @@
 local ffi = require("ffi")
+local C = require("cdef")
 local rt = ffi.load("rt")
 local ep = require("core.epoll_mod")
 local rbtree = require("core.rbtree")
-
-if ffi.arch == "x86" then
-ffi.cdef[[
-int getpid(void);
-
-typedef long int __time_t;
-typedef __time_t time_t;
-
-struct timespec
-  {
-    __time_t tv_sec;
-    long int tv_nsec;
-  };
-
-typedef int __clockid_t;
-typedef __clockid_t clockid_t;
-int clock_gettime(clockid_t clk_id, struct timespec *tp);
-
-struct itimerspec {
-   struct timespec it_interval;  /* Interval for periodic timer */
-   struct timespec it_value;     /* Initial expiration */
-};
-int timerfd_create(clockid_t clockid, int flags);
-int timerfd_settime(int fd, int flags,
-				   const struct itimerspec *new_value,
-				   struct itimerspec *old_value);
-]]
-else
-error("arch not support: " .. ffi.arch)
-end
-
-local CLOCK_MONOTONIC=1
-local CLOCK_MONOTONIC_RAW=4
 
 local g_timer_fd
 local g_timer_ev = {}
@@ -64,7 +32,7 @@ local function timerfd_settime(fd, sec, nsec)
 	local timespec = ffi.new("struct itimerspec")
 	timespec.it_value.tv_sec = sec
 	timespec.it_value.tv_nsec = nsec
-	assert(ffi.C.timerfd_settime(fd, 0, timespec, nil) == 0)
+	assert(C.timerfd_settime(fd, 0, timespec, nil) == 0)
 end
 
 local function add_timer(fn, sec)
@@ -73,7 +41,7 @@ local function add_timer(fn, sec)
 	sec = math.floor(sec)
 
 	local tv = ffi.new("struct timespec")
-	assert(rt.clock_gettime(CLOCK_MONOTONIC_RAW, tv) == 0)
+	assert(rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, tv) == 0)
 	local timer = setmetatable({
 		tv_sec = tv.tv_sec + sec,
 		tv_nsec = tv.tv_nsec + nsec,
@@ -93,7 +61,7 @@ local function process_all_timers()
 	if g_timer_rbtree:size() == 0 then return 0 end
 
 	local tv = ffi.new("struct timespec")
-	assert(rt.clock_gettime(CLOCK_MONOTONIC_RAW, tv) == 0)
+	assert(rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, tv) == 0)
 
 	local n_process = 0
 
@@ -112,7 +80,7 @@ local function get_next_interval()
 	if g_timer_rbtree:size() == 0 then return nil end
 	local t = g_timer_rbtree:min()
 	local tv = ffi.new("struct timespec")
-	assert(rt.clock_gettime(CLOCK_MONOTONIC_RAW, tv) == 0)
+	assert(rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, tv) == 0)
 	assert(timer_lt(tv, t))
 
 	local sec = t.tv_sec - tv.tv_sec
@@ -128,17 +96,17 @@ end
 
 local function init()
 	if g_timer_fd then return end
-	g_timer_fd = ffi.C.timerfd_create(CLOCK_MONOTONIC, 0)
+	g_timer_fd = C.timerfd_create(C.CLOCK_MONOTONIC, 0)
 	assert(g_timer_fd > 0)
 	g_timer_ev.fd = g_timer_fd
 	g_timer_ev.handler = function()
-		print("child pid=" .. ffi.C.getpid() .. " timer fired")
+		print("child pid=" .. C.getpid() .. " timer fired")
 		timerfd_settime(g_timer_fd, 0, 0)
 		while process_all_timers() > 0 do end
 		local sec,nsec = get_next_interval()
 		if sec then timerfd_settime(g_timer_fd, sec, nsec) end
 	end
-	ep.add_event(g_timer_ev, ep.EPOLLIN)
+	ep.add_event(g_timer_ev, C.EPOLLIN)
 end
 
 return {

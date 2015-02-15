@@ -1,72 +1,8 @@
 local ffi = require("ffi")
-require("socket.base")
+local C = require("cdef")
 local co = require("core.co_mod")
 local signal = require("core.signal_mod")
 
-if ffi.arch == "x86" then
-ffi.cdef[[
-struct addrinfo
-{
-  int ai_flags;
-  int ai_family;
-  int ai_socktype;
-  int ai_protocol;
-  socklen_t ai_addrlen;
-  struct sockaddr *ai_addr;
-  char *ai_canonname;
-  struct addrinfo *ai_next;
-};
-
-typedef int __pid_t;
-typedef union sigval
-  {
-    int sival_int;
-    void *sival_ptr;
-  } sigval_t;
-typedef struct sigevent
-  {
-    sigval_t sigev_value;
-    int sigev_signo;
-    int sigev_notify;
-
-    union
-      {
- int _pad[((64 / sizeof (int)) - 3)];
-
-
-
- __pid_t _tid;
-
- struct
-   {
-     void (*_function) (sigval_t);
-     void *_attribute;
-   } _sigev_thread;
-      } _sigev_un;
-  } sigevent_t;
-
-struct gaicb
-{
-  const char *ar_name;
-  const char *ar_service;
-  const struct addrinfo *ar_request;
-  struct addrinfo *ar_result;
-
-  int __return;
-  int __unused[5];
-};
-void freeaddrinfo(struct addrinfo *res);
-int getaddrinfo_a(int mode, struct gaicb *list[],
-	   int nitems, struct sigevent *sevp);
-int gai_error(struct gaicb *req);
-int gai_cancel(struct gaicb *req);
-]]
-else
-error("arch not support: " .. ffi.arch)
-end
-
-local SIGIO = 29
-local SIGUSR1 = 10
 local SIGEV_SIGNAL = 0
 local GAI_NOWAIT = 1
 local SI_ASYNCNL = -60
@@ -85,9 +21,9 @@ local function handle_answer(siginfo)
 	local ip, port
 	while runp ~= nil do
 		local addr = ffi.cast("struct sockaddr_in *", runp.ai_addr)
-		local val = ffi.cast("unsigned short",ffi.C.ntohs(addr[0].sin_port))
+		local val = ffi.cast("unsigned short",C.ntohs(addr[0].sin_port))
 		port = tonumber(val)
-		ip = ffi.string(ffi.C.inet_ntoa(addr[0].sin_addr))
+		ip = ffi.string(C.inet_ntoa(addr[0].sin_addr))
 		if ip ~= "0.0.0.0" then
 			break
 		end
@@ -105,7 +41,7 @@ local next_req_key = 1
 local function resolve(host, port, handler)
 	if handler_registered == false then
 		handler_registered = true
-		signal.add_signal_handler(SIGIO, handle_answer)
+		signal.add_signal_handler(C.SIGIO, handle_answer)
 	end
 
 	local gaicb = ffi.new("struct gaicb")
@@ -121,7 +57,7 @@ local function resolve(host, port, handler)
 	sig.sigev_notify = SIGEV_SIGNAL
 	sig.sigev_value.sival_int = next_req_key
 	next_req_key = next_req_key + 1
-	sig.sigev_signo = SIGIO
+	sig.sigev_signo = C.SIGIO
 	tmp[0] = gaicb
 	assert(anl.getaddrinfo_a(GAI_NOWAIT, tmp, 1, sig) == 0)
 

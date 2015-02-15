@@ -3,7 +3,6 @@ local ffi = require("ffi")
 if ffi.arch == "x86" then
 ffi.cdef[[
 typedef int ssize_t;
-typedef unsigned int size_t;
 extern ssize_t read(int fd, void *buf, size_t count);
 extern ssize_t write(int fd, const void *buf, size_t count);
 struct iovec {
@@ -16,6 +15,9 @@ int getpid(void);
 
 int close(int fd);
 int ioctl(int d, int request, ...);
+
+ssize_t sendfile(int out_fd, int in_fd, void *offset, size_t count);
+int open(const char *pathname, int flags);
 
 typedef int time_t;
 typedef long suseconds_t;
@@ -46,6 +48,14 @@ struct timezone {
 	int tz_dsttime;         /* type of DST correction */
 };
 int gettimeofday(struct timeval *tv, struct timezone *tz);
+
+int ioctl(int d, int request, ...);
+int close(int fd);
+char *strerror(int errnum);
+
+static const int EAGAIN = 11;
+static const int EINTR = 4;
+static const int EINPROGRESS = 115;
 ]]
 else
 error("arch not support: " .. ffi.arch)

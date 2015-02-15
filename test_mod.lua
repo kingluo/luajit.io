@@ -102,17 +102,17 @@ local function service(req, rsp, cf, extra)
 		-- end
 	-- end
 	-- db:set_keepalive()
-	local args = req:get_post_args()
-	for k,v in pairs(args) do
-		print("key=" .. k)
-		if type(v) == "table" then
-			for _,v1 in ipairs(v) do
-				print("value=" .. v1)
-			end
-		else
-			print("value=" .. tostring(v))
-		end
-	end
+	-- local args = req:get_post_args()
+	-- for k,v in pairs(args) do
+		-- print("key=" .. k)
+		-- if type(v) == "table" then
+			-- for _,v1 in ipairs(v) do
+				-- print("value=" .. v1)
+			-- end
+		-- else
+			-- print("value=" .. tostring(v))
+		-- end
+	-- end
 	return rsp:say("hello world, conf ok!\n")
 end
 

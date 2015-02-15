@@ -1,14 +1,6 @@
 local ffi = require"ffi"
+local C = require"cdef"
 local ep = require"core.epoll_mod"
-
-ffi.cdef[[
-typedef int ssize_t;
-typedef unsigned int size_t;
-ssize_t sendfile(int out_fd, int in_fd, void *offset, size_t count);
-int open(const char *pathname, int flags);
-extern int setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen);
-int close(int fd);
-]]
 
 local mime_types = {
 	["txt"] = "text/plain",
@@ -24,12 +16,9 @@ local mime_types = {
 	["js"] = "application/x-javascript",
 }
 
-local IPPROTO_TCP = 6
-local TCP_CORK = 3
-
 local function service(req, rsp, cf)
 	--local option = ffi.new("int[1]", 1)
-	--assert(ffi.C.setsockopt(rsp.sock.fd, IPPROTO_TCP, TCP_CORK, ffi.cast("void*",option), ffi.sizeof("int")) == 0)
+	--assert(C.setsockopt(rsp.sock.fd, C.IPPROTO_TCP, C.TCP_CORK, ffi.cast("void*",option), ffi.sizeof("int")) == 0)
 
 	local path = req.url:path()
 	local ext = string.match(path, "%.([^%.]+)$")
@@ -42,11 +31,11 @@ local function service(req, rsp, cf)
 	rsp.headers["content-length"] = flen
 	rsp:send_headers()
 
-	local fd = ffi.C.open(fpath, 0)
+	local fd = C.open(fpath, 0)
 	assert(fd)
 	local err
 	while true do
-		local len = ffi.C.sendfile(rsp.sock.fd, fd, nil, flen)
+		local len = C.sendfile(rsp.sock.fd, fd, nil, flen)
 		local errno = ffi.errno()
 
 		if len > 0 then flen = flen - len end
@@ -55,16 +44,16 @@ local function service(req, rsp, cf)
 		if len == 0 then
 			err = "sendfile: socket broekn"
 			break
-		elseif errno == EAGAIN then
-			ep.add_event(rsp.sock.ev, ep.EPOLLOUT)
+		elseif errno == C.EAGAIN then
+			ep.add_event(rsp.sock.ev, C.EPOLLOUT)
 			rsp.sock:yield(YIELD_W)
-			ep.del_event(rsp.sock.ev, ep.EPOLLOUT)
-		elseif errno ~= EINTR then
-			err = ffi.string(ffi.C.strerror(errno))
+			ep.del_event(rsp.sock.ev, C.EPOLLOUT)
+		elseif errno ~= C.EINTR then
+			err = ffi.string(C.strerror(errno))
 			break
 		end
 	end
-	assert(ffi.C.close(fd) == 0)
+	assert(C.close(fd) == 0)
 	if err then return nil,err end
 end
 

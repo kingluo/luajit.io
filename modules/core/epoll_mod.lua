@@ -1,46 +1,6 @@
 local ffi = require("ffi")
+local C = require("cdef")
 local bit = require("bit")
-
-if ffi.arch == "x86" then
-ffi.cdef[[
-typedef unsigned int uint32_t;
-typedef unsigned long long int uint64_t;
-
-typedef union epoll_data
-{
-  void *ptr;
-  int fd;
-  uint32_t u32;
-  uint64_t u64;
-} epoll_data_t;
-
-struct epoll_event
-{
-  uint32_t events;
-  epoll_data_t data;
-};
-
-int epoll_create(int size);
-int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
-int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout);
-
-int getpid(void);
-]]
-else
-error("arch not support: " .. ffi.arch)
-end
-
-local EPOLL_CTL_ADD=1
-local EPOLL_CTL_DEL=2
-local EPOLL_CTL_MOD=3
-
-local EPOLLIN=0x1
-local EPOLLPRI=0x2
-local EPOLLOUT=0x4
-local EPOLLERR=0x8
-local EPOLLHUP=0x10
-local EPOLLET=0x8000
-local EPOLLRDHUP=0x2000
 
 local g_epoll_fd
 local g_prepare_hooks = {}
@@ -55,15 +15,15 @@ local function add_event(ev, ...)
 	local cmd
 	if not ev.events then
 		ev.events = 0
-		cmd = EPOLL_CTL_ADD
+		cmd = C.EPOLL_CTL_ADD
 	else
-		cmd = EPOLL_CTL_MOD
+		cmd = C.EPOLL_CTL_MOD
 	end
 	if bit.band(ev.events, ...) == 0 then
 		ev_c.data.fd = ev.fd
 		ev_c.events = bit.bor(ev.events, ...)
 		ev.events = ev_c.events
-		assert(ffi.C.epoll_ctl(g_epoll_fd, cmd, ev.fd, ev_c) == 0)
+		assert(C.epoll_ctl(g_epoll_fd, cmd, ev.fd, ev_c) == 0)
 	end
 end
 
@@ -72,20 +32,20 @@ local function del_event(ev, ...)
 	local n_event = select('#',...)
 	if n_event == 0 then
 		assert(handlers[ev.fd] == ev)
-		assert(ffi.C.epoll_ctl(g_epoll_fd, EPOLL_CTL_DEL, ev.fd, nil) == 0)
+		assert(C.epoll_ctl(g_epoll_fd, C.EPOLL_CTL_DEL, ev.fd, nil) == 0)
 		handlers[ev.fd] = nil
 		ev.events = nil
 	else
 		ev_c.data.fd = ev.fd
 		ev_c.events = bit.band(ev.events, bit.bnot(bit.bor(...)))
 		ev.events = ev_c.events
-		assert(ffi.C.epoll_ctl(g_epoll_fd, EPOLL_CTL_MOD, ev.fd, ev_c) == 0)
+		assert(C.epoll_ctl(g_epoll_fd, C.EPOLL_CTL_MOD, ev.fd, ev_c) == 0)
 	end
 end
 
 local function init(epoll_size)
 	if not g_epoll_fd then
-		g_epoll_fd = ffi.C.epoll_create(epoll_size or 20000)
+		g_epoll_fd = C.epoll_create(epoll_size or 20000)
 	end
 end
 
@@ -110,9 +70,9 @@ local function run(expect_events)
 			end
 		end
 
-		print("# pid=" .. ffi.C.getpid() .. " epoll_wait enter...")
-		local n = ffi.C.epoll_wait(g_epoll_fd, ev_set, MAX_EPOLL_EVENT, wait_timeout)
-		print("# pid=" .. ffi.C.getpid() .. " epoll_wait exit...")
+		print("# pid=" .. C.getpid() .. " epoll_wait enter...")
+		local n = C.epoll_wait(g_epoll_fd, ev_set, MAX_EPOLL_EVENT, wait_timeout)
+		print("# pid=" .. C.getpid() .. " epoll_wait exit...")
 
 		if n == -1 then return n_events, utils.strerror() end
 
@@ -132,19 +92,9 @@ local function run(expect_events)
 end
 
 return {
-	-- functions
 	add_event = add_event,
 	del_event = del_event,
 	add_prepare_hook = add_prepare_hook,
 	init = init,
 	run = run,
-
-	-- constants
-	EPOLLIN=EPOLLIN,
-	EPOLLPRI=EPOLLPRI,
-	EPOLLOUT=EPOLLOUT,
-	EPOLLERR=EPOLLERR,
-	EPOLLHUP=EPOLLHUP,
-	EPOLLET=EPOLLET,
-	EPOLLRDHUP=EPOLLRDHUP,
 }
