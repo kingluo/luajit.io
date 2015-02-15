@@ -276,17 +276,31 @@ local g_http_cfg
 local function http_parse_conf(cf)
 	g_http_cfg = cf
 
+	local function more_than(a,b)
+		return a[2] > b[2]
+	end
+
 	for _,srv in ipairs(cf) do
-		srv.servlet_info = {exact_match={},plain={},pattern={}}
+		srv.servlet_hash = {
+			exact_hash={},
+			prefix_hash={},
+			postfix_hash={}, postfix_hash_len=0,
+			pattern={}
+		}
+		local shash = srv.servlet_hash
 		for _,servlet in ipairs(srv.servlet) do
 			if servlet[1] == "=" then
-				srv.servlet_info.exact_match[servlet[2]] = servlet
+				shash.exact_hash[servlet[2]] = servlet
 			elseif servlet[1] == "^" or servlet[1] == "^~" then
-				table.insert(srv.servlet_info.plain, servlet)
+				table.insert(shash.prefix_hash, servlet)
+			elseif servlet[1] == "$" then
+				shash.postfix_hash[servlet[2]] = servlet
+				shash.postfix_hash_len = shash.postfix_hash_len + 1
 			else
-				table.insert(srv.servlet_info.pattern, servlet)
+				table.insert(shash.pattern, servlet)
 			end
 		end
+		table.sort(shash.prefix_hash, more_than)
 	end
 
 	local function more_than(a,b)
@@ -324,6 +338,25 @@ local function http_parse_conf(cf)
 	end
 end
 
+local function bsearch(a, len)
+	local s,e = 1,#a
+	local mid = 0
+	while s <= e do
+		mid = math.floor((s + e) / 2)
+		local m = #(a[mid][2])
+		if m > len  then
+			s = mid + 1
+		elseif m < len then
+			e = mid - 1
+		else
+			break
+		end
+	end
+	return mid
+end
+
+local NULL = ffi.cast("void*", 0)
+
 local function do_servlet(req, rsp)
 	local match_srv
 	local host = req.headers["host"] or ""
@@ -338,8 +371,9 @@ local function do_servlet(req, rsp)
 		-- longest wildcard name starting with an asterisk, e.g. "*.example.org"
 		if not match_srv then
 			for _,v in ipairs(srv_list.prefix_hash) do
-				local i,j = host:find(v.host,1,true)
-				if j == hlen then
+				local len = #v.host
+				local p = ffi.cast("const char*", host)
+				if C.strncmp(p + hlen - len, v.host, len) == 0 then
 					match_srv = v.srv
 					break
 				end
@@ -349,8 +383,7 @@ local function do_servlet(req, rsp)
 		-- longest wildcard name ending with an asterisk, e.g. "mail.*"
 		if not match_srv then
 			for _,v in ipairs(srv_list.postfix_hash) do
-				local i,j = host:find(v.host,1,true)
-				if i == 1 then
+				if C.strncmp(host, v.host, #v.host) == 0 then
 					match_srv = v.srv
 					break
 				end
@@ -378,21 +411,35 @@ local function do_servlet(req, rsp)
 
 	local servlet
 	if match_srv then
+		local shash = match_srv.servlet_hash
 		local path = req.url:path()
+		local pathlen = #path
 		local match_done = false
 
 		-- exact match
-		servlet = match_srv.servlet_info.exact_match[path]
+		servlet = shash.exact_hash[path]
 		if servlet then match_done = true end
 
-		-- plain find
+		-- postfix match
 		if not match_done then
-			for _,slcf in ipairs(match_srv.servlet_info.plain) do
-				local modifier,pat = slcf[1],slcf[2]
-				local s = string.find(path, pat, 1, true)
-				if s then
+			if shash.postfix_hash_len > 0 then
+				local p = C.strrchr(path, 46)
+				if p ~= NULL then
+					local postfix = ffi.string(p + 1)
+					servlet = shash.postfix_hash[postfix]
+					if servlet then match_done = true end
+				end
+			end
+		end
+
+		-- prefix match
+		if not match_done then
+			for i=1, bsearch(shash.prefix_hash, pathlen) do
+				local slcf = shash.prefix_hash[i]
+				local prefix = slcf[2]
+				if C.strncmp(path, prefix, #prefix) == 0 then
 					servlet = slcf
-					match_done = (modifier == "^~")
+					match_done = (slcf[1] == "^~")
 					break
 				end
 			end
@@ -400,7 +447,7 @@ local function do_servlet(req, rsp)
 
 		-- pattern match
 		if not match_done then
-			for _,slcf in ipairs(match_srv.servlet_info.pattern) do
+			for _,slcf in ipairs(shash.pattern) do
 				local modifier,pat = slcf[1],slcf[2]
 				if modifier == "~" then
 					if string.find(path, pat) then

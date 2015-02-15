@@ -53,6 +53,9 @@ int ioctl(int d, int request, ...);
 int close(int fd);
 char *strerror(int errnum);
 
+char *strrchr(const char *s, int c);
+int strncmp(const char *s1, const char *s2, size_t n);
+
 static const int EAGAIN = 11;
 static const int EINTR = 4;
 static const int EINPROGRESS = 115;

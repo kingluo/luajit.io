@@ -21,11 +21,12 @@ require("http") {
 			-- http://nginx.org/en/docs/http/ngx_http_core_module.html#location
 			-- Add two new modifiers:
 			-- "^" explicitly denotes longest prefix matching
-			-- "f" denotes matching function
+			-- "$" means postfix matching, if matched, regexp match would be skipped
+			-- "f" means matching function, with same matching priority as regexp matching
 			-- {<modifier>, (<url match pattern> | <match function>), (<module name> | <inline function>), ...}
 			{"=", "/test2", "test_mod"},
 			{"^", "/foobar", "foobar_mod"},
-			{"~", "%.lux$", "lux_mod", path="WEB-INF/lux/"},
+			{"$", "lux", "lux_mod", path="WEB-INF/lux/"},
 			{"^~", "/static/", "static_mod"},
 			{
 				"f",
