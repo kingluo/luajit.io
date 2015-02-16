@@ -53,8 +53,13 @@ int ioctl(int d, int request, ...);
 int close(int fd);
 char *strerror(int errnum);
 
+char *strchr(const char *s, int c);
 char *strrchr(const char *s, int c);
 int strncmp(const char *s1, const char *s2, size_t n);
+
+void *memchr(const void *s, int c, size_t n);
+void *memrchr(const void *s, int c, size_t n);
+int memcmp(const void *s1, const void *s2, size_t n);
 
 static const int EAGAIN = 11;
 static const int EINTR = 4;

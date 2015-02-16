@@ -6,6 +6,7 @@ local co = require("core.co_mod")
 local utils = require("core.utils_mod")
 local signal = require("core.signal_mod")
 local dns = require("socket.dns_mod")
+local dfa_compile = require("core.dfa").compile
 
 local READ_ALL = 1
 local READ_LINE = 2
@@ -90,26 +91,27 @@ function tcp_mt.__index.settimeout(self, msec)
 	self.timeout = msec / 1000
 end
 
-local function receive_ll(self, pattern, rlen, options)
+local function receive_ll(self, pattern)
 	if not self.rbuf_c then self.rbuf_c = ffi.new("char[?]", MAX_RBUF_LEN) end
 	if not self.rbuf then self.rbuf = "" end
 
 	local mode
-	if not pattern or pattern == '*l' then
+	local typ = type(pattern)
+	if typ == "function" then
+		mode = READ_UNTIL
+	elseif typ == 'number' then
+		mode = READ_LEN
+	elseif pattern == nil or pattern == '*l' then
 		mode = READ_LINE
 	elseif pattern == '*a' then
 		mode = READ_ALL
-	elseif type(pattern) == 'number' then
-		mode = READ_LEN
-	else
-		mode = READ_UNTIL
 	end
 
 	while true do
 		local rbuf_len = #self.rbuf
 		if rbuf_len > 0 then
 			if mode == READ_LINE then
-				local la,lb = string.find(self.rbuf, '\r\n')
+				local la,lb = string.find(self.rbuf, "\r\n", 1, true)
 				if la then
 					local str = string.sub(self.rbuf, 1, la-1)
 					self.rbuf = string.sub(self.rbuf, lb+1)
@@ -122,48 +124,16 @@ local function receive_ll(self, pattern, rlen, options)
 					return str
 				end
 			elseif mode == READ_UNTIL then
-				local i,j
-				local is_first_invoke = self.receiveutil_state == nil
-				if not self.receiveutil_state then
-					i,j = string.find(self.rbuf, pattern)
-					if i then
-						if options and options.inclusive then i = j + 1 end
-						self.receiveutil_state = {i=i,j=j}
-					end
-				else
-					i,j = self.receiveutil_state.i, self.receiveutil_state.j
-				end
-
-				if i then
-					if i == 1 then
-						if is_first_invoke then return "" end
-						if not options or not options.inclusive then
-							self.rbuf = string.sub(self.rbuf, j + 1)
-						end
-						self.receiveutil_state = nil
-						return nil
-					end
-					i = i - 1
-					if rlen and rlen < i then i = rlen end
-
-					local str = string.sub(self.rbuf, 1, i)
-					self.rbuf = string.sub(self.rbuf, i + 1)
-
-					self.receiveutil_state.i = self.receiveutil_state.i - i
-					self.receiveutil_state.j = self.receiveutil_state.j - i
-
-					return str
-				elseif rlen and rlen <= rbuf_len then
-					local str = string.sub(self.rbuf, 1, rlen)
-					self.rbuf = string.sub(self.rbuf, rlen+1)
-					return str
+				local r,err
+				self.rbuf,r,err = pattern(self.rbuf)
+				if r or err then
+					return r,err
 				end
 			end
 		end
 
 		while true do
 			if self.rtimedout then
-				assert(self.receiveutil_state == nil)
 				local str = self.rbuf
 				self.rbuf = ""
 				return nil, "timeout", self.rbuf
@@ -230,8 +200,82 @@ function tcp_mt.__index.receive(self, pattern)
 end
 
 function tcp_mt.__index.receiveuntil(self, pattern, options)
-	return function(len)
-		return self:receive(pattern, len, options)
+	if not pattern or pattern == "" then return nil, "empty pattern" end
+	local inclusive = options and options.inclusive
+
+	local dfa = dfa_compile(pattern)
+	local node = dfa.start
+	local data = ""
+	local reset = false
+
+	return function(size)
+		assert(size == nil or size > 0)
+
+		if reset then
+			reset = false
+			node = dfa.start
+			if size then
+				return nil
+			end
+		end
+
+		if size and size <= #data then
+			local r
+			r = data:sub(1,size)
+			data = data:sub(size+1)
+			if node == dfa.last and #data == 0 then
+				reset = true
+			end
+			return r
+		elseif node == dfa.last then
+			local r = data
+			data = ""
+			reset = true
+			return r
+		end
+
+		return self:receive(function(rbuf)
+			local idx = -1
+			for i=1,#rbuf do
+				idx = i
+				node = node[rbuf:sub(i,i)]
+				if not node then node = dfa.start
+				elseif node == dfa.last then break end
+			end
+
+			if idx == #rbuf then
+				data = data .. rbuf
+				rbuf = ""
+			else
+				data = data .. rbuf:sub(1,idx)
+				rbuf = rbuf:sub(idx+1)
+			end
+
+			local r
+			local n_pat = node[3]
+			if node ~= dfa.last then
+				if size and size <= (#data - n_pat) then
+					r = data:sub(1,size)
+					data = data:sub(size+1)
+				end
+			else
+				if size then
+					local l = #data
+					if not inclusive then l = l - n_pat end
+					if size < l then
+						r = data:sub(1,size)
+						data = data:sub(size+1)
+					end
+				end
+				if not r then
+					if inclusive then r = data
+					else r = data:sub(1, #data - n_pat) end
+					data = ""
+					reset = true
+				end
+			end
+			return rbuf,r
+		end)
 	end
 end
 

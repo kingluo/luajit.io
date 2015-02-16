@@ -489,6 +489,7 @@ local function do_servlet(req, rsp)
 		end
 	else
 		print "no servlet"
+		return false
 	end
 end
 
