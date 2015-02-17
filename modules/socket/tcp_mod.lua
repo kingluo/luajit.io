@@ -8,13 +8,11 @@ local signal = require("core.signal_mod")
 local dns = require("socket.dns_mod")
 local dfa_compile = require("core.dfa").compile
 
-local READ_ALL = 1
-local READ_LINE = 2
-local READ_LEN = 3
-local READ_UNTIL = 4
+local strfind = string.find
+local strsub = string.sub
+local tinsert = table.insert
 
 local tcp_mt = {__index = {}}
-local MAX_RBUF_LEN = 4096
 
 local pools = {}
 
@@ -91,60 +89,95 @@ function tcp_mt.__index.settimeout(self, msec)
 	self.timeout = msec / 1000
 end
 
-local function receive_ll(self, pattern)
-	if not self.rbuf_c then self.rbuf_c = ffi.new("char[?]", MAX_RBUF_LEN) end
-	if not self.rbuf then self.rbuf = "" end
+local READ_CHUNK_SIZE = 4096
+local eol1 = string.byte("\r")
+local eol2 = string.byte("\n")
+ffi.cdef[[ struct buf_gc {void*p;}; ]]
+local buf_gc = ffi.metatype("struct buf_gc", {__gc=function(g) C.free(g.p) end})
 
-	local mode
-	local typ = type(pattern)
-	if typ == "function" then
-		mode = READ_UNTIL
-	elseif typ == 'number' then
-		mode = READ_LEN
-	elseif pattern == nil or pattern == '*l' then
-		mode = READ_LINE
-	elseif pattern == '*a' then
-		mode = READ_ALL
+local function receive_ll(self, pattern)
+	if not self.rbuf then
+		local buf = C.realloc(nil, READ_CHUNK_SIZE)
+		local p = ffi.cast("char*", buf)
+		self.rbuf = {cp=p, rp=p, size=READ_CHUNK_SIZE, buf=p, gc=buf_gc(buf)}
 	end
 
+	local rbuf = self.rbuf
+	pattern = pattern or "*l"
+	local typ = type(pattern)
+
 	while true do
-		local rbuf_len = #self.rbuf
-		if rbuf_len > 0 then
-			if mode == READ_LINE then
-				local la,lb = string.find(self.rbuf, "\r\n", 1, true)
-				if la then
-					local str = string.sub(self.rbuf, 1, la-1)
-					self.rbuf = string.sub(self.rbuf, lb+1)
-					return str
+		local avaliable = rbuf.rp - rbuf.cp
+		if avaliable > 0 then
+			if pattern == "*l" then
+				local cp = C.memchr(rbuf.cp, eol2, avaliable)
+				cp = ffi.cast("char*", cp)
+				if cp ~= nil then
+					local sz = cp - rbuf.buf
+					if sz > 0 then
+						local p = cp - 1
+						if p[0] == eol1 then
+							sz = sz - 1
+						end
+					end
+					local s = ffi.string(rbuf.buf, sz)
+					sz = rbuf.rp - cp - 1
+					C.memmove(rbuf.buf, cp + 1, sz)
+					rbuf.cp = rbuf.buf
+					rbuf.rp = rbuf.buf + sz
+					return s
+				else
+					rbuf.cp = rbuf.rp
 				end
-			elseif mode == READ_LEN then
-				if rbuf_len >= pattern then
-					local str = string.sub(self.rbuf, 1, pattern)
-					self.rbuf = string.sub(self.rbuf, pattern+1)
-					return str
+			elseif typ == "number" then
+				local sz = rbuf.rp - rbuf.buf
+				if sz >= pattern then
+					local s = ffi.string(rbuf.buf, pattern)
+					C.memmove(rbuf.buf, rbuf.buf + pattern, sz - pattern)
+					rbuf.rp = rbuf.buf + sz - pattern
+					return s
 				end
-			elseif mode == READ_UNTIL then
-				local r,err
-				self.rbuf,r,err = pattern(self.rbuf)
+			elseif typ == "function" then
+				local r,err = pattern(self.rbuf)
+				local sz = rbuf.rp - rbuf.cp
+				C.memmove(rbuf.buf, rbuf.cp, sz)
+				rbuf.cp = rbuf.buf
+				rbuf.rp = rbuf.buf + sz
 				if r or err then
 					return r,err
 				end
 			end
 		end
 
+		local sz = rbuf.rp - rbuf.buf
+		assert(sz <= rbuf.size)
+		if (sz == rbuf.size) then
+			local newsize = rbuf.size + READ_CHUNK_SIZE
+			local csz = rbuf.cp - rbuf.buf
+			local buf = C.realloc(rbuf.buf, newsize)
+			assert(buf ~= nil)
+			local p = ffi.cast("char*", buf)
+			rbuf.buf = p
+			rbuf.gc.p = buf
+			rbuf.size = newsize
+			rbuf.cp = p + csz
+			rbuf.rp = p + sz
+		end
+
 		while true do
 			if self.rtimedout then
-				local str = self.rbuf
-				self.rbuf = ""
-				return nil, "timeout", self.rbuf
+				local s = ffi.string(rbuf.buf, rbuf.rp - rbuf.buf)
+				rbuf.cp = rbuf.buf
+				rbuf.rp = rbuf.buf
+				return nil, "timeout", s
 			end
 
-			local err
-			local len = C.read(self.fd, self.rbuf_c, MAX_RBUF_LEN)
+			local len = C.read(self.fd, rbuf.rp, rbuf.size - sz)
 			local errno = ffi.errno()
 
+			local err
 			if len > 0 then
-				self.rbuf = self.rbuf .. ffi.string(self.rbuf_c, len)
+				rbuf.rp = rbuf.rp + len
 				break
 			elseif len == 0 then
 				self:close()
@@ -157,16 +190,11 @@ local function receive_ll(self, pattern)
 			end
 
 			if err then
-				local rbuf_len = #self.rbuf
-				local str
-				if rbuf_len > 0 then
-					str = self.rbuf
-					self.rbuf = ""
-					if mode == READ_ALL then
-						return str
-					end
+				local s = ffi.string(rbuf.buf, rbuf.rp - rbuf.buf)
+				if pattern == "*a" then
+					return s
 				end
-				return nil, err, str
+				return nil, err, s
 			end
 		end
 	end
@@ -221,8 +249,8 @@ function tcp_mt.__index.receiveuntil(self, pattern, options)
 
 		if size and size <= #data then
 			local r
-			r = data:sub(1,size)
-			data = data:sub(size+1)
+			r = strsub(data,1,size)
+			data = strsub(data,size+1)
 			if node == dfa.last and #data == 0 then
 				reset = true
 			end
@@ -235,46 +263,42 @@ function tcp_mt.__index.receiveuntil(self, pattern, options)
 		end
 
 		return self:receive(function(rbuf)
-			local idx = -1
-			for i=1,#rbuf do
-				idx = i
-				node = node[rbuf:sub(i,i)]
+			local cp = rbuf.cp
+			while cp ~= rbuf.rp do
+				local c = ffi.string(cp, 1)
+				cp = cp + 1
+				node = node[c]
 				if not node then node = dfa.start
 				elseif node == dfa.last then break end
 			end
 
-			if idx == #rbuf then
-				data = data .. rbuf
-				rbuf = ""
-			else
-				data = data .. rbuf:sub(1,idx)
-				rbuf = rbuf:sub(idx+1)
-			end
+			data = data .. ffi.string(rbuf.cp, cp - rbuf.cp)
+			rbuf.cp = cp
 
 			local r
 			local n_pat = node[3]
 			if node ~= dfa.last then
 				if size and size <= (#data - n_pat) then
-					r = data:sub(1,size)
-					data = data:sub(size+1)
+					r = strsub(data,1,size)
+					data = strsub(data,size+1)
 				end
 			else
 				if size then
 					local l = #data
 					if not inclusive then l = l - n_pat end
 					if size < l then
-						r = data:sub(1,size)
-						data = data:sub(size+1)
+						r = strsub(data,1,size)
+						data = strsub(data,size+1)
 					end
 				end
 				if not r then
 					if inclusive then r = data
-					else r = data:sub(1, #data - n_pat) end
+					else r = strsub(data,1, #data - n_pat) end
 					data = ""
 					reset = true
 				end
 			end
-			return rbuf,r
+			return r
 		end)
 	end
 end
@@ -368,8 +392,8 @@ local function send_ll(self, ...)
 					n_iovec = n_iovec - 1
 					if len == 0 then break end
 				else
-					local str = string.sub(iovec[i].iov_base, len + 1)
-					table.insert(gc, str)
+					local str = strsub(iovec[i].iov_base, len + 1)
+					tinsert(gc, str)
 					iovec[i].iov_base = ffi.cast("void*", str)
 					iovec[i].iov_len = iovec[i].iov_len - len
 					break
@@ -551,7 +575,7 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 	end
 
 	-- resolve host and/or port if needed
-	if host:find("^%d+%.%d+%.%d+%.%d+$") == nil or type(port) ~= "number" then
+	if strfind(host, "^%d+%.%d+%.%d+%.%d+$") == nil or type(port) ~= "number" then
 		self.resolve_key = dns.resolve(host, port, function(ip, port)
 			co.resume(self[YIELD_W], ip, port)
 		end)
@@ -653,7 +677,7 @@ local function tcp_parse_conf(cf)
 					srv_tbl[port][address]["default_server"] = srv
 				end
 			end
-			table.insert(srv_tbl[port][address], srv)
+			tinsert(srv_tbl[port][address], srv)
 		end
 	end
 

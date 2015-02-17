@@ -4,8 +4,16 @@ local tcp = require("socket.tcp_mod")
 local URI = require("uri")
 local uri_decode = require("uri._util").uri_decode
 
+local strsub = string.sub
+local strfind = string.find
+local strmatch = string.match
+local strgsub = string.gsub
+local strformat = string.format
+local tinsert = table.insert
+local tsort = table.sort
+
 local function unescape(s)
-	s = string.gsub(s,"+"," ")
+	s = strgsub(s,"+"," ")
 	return uri_decode(s)
 end
 
@@ -15,14 +23,14 @@ local function parse_uri_args(query)
 	local j = 0
 	local match
 	while true do
-		i,j,match = query:find("([^&]+)", j+1)
+		i,j,match = strfind(query, "([^&]+)", j+1)
 		if not match then break end
 		local n = match
 		local v
-		local i = match:find("=",1,true)
+		local i = strfind(match,"=",1,true)
 		if i then
-			n = match:sub(1,i-1)
-			v = match:sub(i+1)
+			n = strsub(match,1,i-1)
+			v = strsub(match,i+1)
 		end
 
 		n = unescape(n)
@@ -35,7 +43,7 @@ local function parse_uri_args(query)
 			if type(uri_args[n]) ~= "table" then
 				uri_args[n] = {uri_args[n]}
 			end
-			table.insert(uri_args[n], v)
+			tinsert(uri_args[n], v)
 		end
 	end
 	return uri_args
@@ -44,24 +52,29 @@ end
 local function receive_headers(sock, headers)
 	local line, name, value, err
 	headers = headers or {}
+
 	-- get first line
 	line, err = sock:receive()
 	if err then return nil, err end
+
 	-- headers go until a blank line is found
 	while line ~= "" do
 		-- get field-name and value
-		name, value = string.match(line, "^(.-):%s*(.*)")
+		name, value = strmatch(line, "^(.-):%s*(.*)")
 		if not (name and value) then return nil, "malformed reponse headers" end
 		name = string.lower(name)
+
 		-- get next line (value might be folded)
 		line, err = sock:receive()
 		if err then return nil, err end
+
 		-- unfold any folded values
-		while string.find(line, "^%s") do
+		while strfind(line, "^%s") do
 			value = value .. line
 			line = sock:receive()
 			if err then return nil, err end
 		end
+
 		-- save pair in table
 		if headers[name] then headers[name] = headers[name] .. ", " .. value
 		else headers[name] = value end
@@ -79,7 +92,7 @@ local function receive_body(sock, headers, chunk_handler)
 			local line, err = sock:receive()
 			if err then return false, err end
 			-- get chunk size, skip extention
-			local size = tonumber(string.gsub(line, ";.*", ""), 16)
+			local size = tonumber(strgsub(line, ";.*", ""), 16)
 			if not size then return false, "invalid chunk size" end
 			-- was it the last chunk?
 			if size > 0 then
@@ -192,12 +205,12 @@ function http_rsp_mt.__index.send_headers(self)
 		local eol = "\r\n"
 		local sep = ": "
 		for f, v in pairs(self.headers) do
-			table.insert(tbl, f)
-			table.insert(tbl, sep)
-			table.insert(tbl, v)
-			table.insert(tbl, eol)
+			tinsert(tbl, f)
+			tinsert(tbl, sep)
+			tinsert(tbl, v)
+			tinsert(tbl, eol)
 		end
-		table.insert(tbl, eol)
+		tinsert(tbl, eol)
 
 		local ret,err = sk:send(tbl)
 		if err then return err end
@@ -223,7 +236,7 @@ function http_rsp_mt.__index.say(self, ...)
 		local len = #str
 		self.output_buf_bytes = self.output_buf_bytes + len
 		if self.is_chunked then
-			local size = string.format("%X\r\n", len)
+			local size = strformat("%X\r\n", len)
 			tbl[self.output_buf_idx] = size
 			self.output_buf_idx = self.output_buf_idx + 1
 			self.output_buf_bytes = self.output_buf_bytes + #size
@@ -277,7 +290,7 @@ local function http_parse_conf(cf)
 	g_http_cfg = cf
 
 	local function more_than(a,b)
-		return a[2] > b[2]
+		return a > b
 	end
 
 	for _,srv in ipairs(cf) do
@@ -292,19 +305,24 @@ local function http_parse_conf(cf)
 			if servlet[1] == "=" then
 				shash.exact_hash[servlet[2]] = servlet
 			elseif servlet[1] == "^" or servlet[1] == "^~" then
-				table.insert(shash.prefix_hash, servlet)
+				shash.prefix_hash[servlet[2]] = servlet
 			elseif servlet[1] == "$" then
 				shash.postfix_hash[servlet[2]] = servlet
 				shash.postfix_hash_len = shash.postfix_hash_len + 1
 			else
-				table.insert(shash.pattern, servlet)
+				tinsert(shash.pattern, servlet)
 			end
 		end
-		table.sort(shash.prefix_hash, more_than)
-	end
 
-	local function more_than(a,b)
-		return a.host > b.host
+		local tmp = {}
+		for k in pairs(shash.prefix_hash) do
+			tmp[#k] = 1
+		end
+		shash.prefix_size_hash = {}
+		for k in pairs(tmp) do
+			tinsert(shash.prefix_size_hash, k)
+		end
+		tsort(shash.prefix_size_hash, more_than)
 	end
 
 	for port,addresses in pairs(cf.srv_tbl) do
@@ -313,49 +331,49 @@ local function http_parse_conf(cf)
 			srv_list.prefix_hash = {}
 			srv_list.postfix_hash = {}
 			srv_list.pattern = {}
+
 			for _,srv in ipairs(srv_list) do
 				for _,host in ipairs(srv.server_name) do
-					local prefix = host:sub(1,1)
-					local postfix = host:sub(#host)
+					local prefix = strsub(host,1,1)
+					local postfix = strsub(host,#host)
 					if prefix == "~" then
-						table.insert(srv_list.pattern, {host=host:sub(2),srv=srv})
+						tinsert(srv_list.pattern, {host=strsub(host,2),srv=srv})
 					elseif prefix == "*" or prefix == "." then
-						host = host:sub((prefix == ".") and 2 or 3)
-						table.insert(srv_list.prefix_hash,{host=host,srv=srv})
+						if prefix == "*" then host = strsub(host,2) end
+						srv_list.prefix_hash[host] = srv
 						if prefix == "." then
 							srv_list.extra_hash[host] = srv
 						end
 					elseif postfix == "*" then
-						table.insert(srv_list.postfix_hash,{host=host:sub(1,#host-2),srv=srv})
+						srv_list.postfix_hash[strsub(host,1,#host-1)] = srv
 					else
 						srv_list.extra_hash[host] = srv
 					end
 				end
 			end
-			table.sort(srv_list.prefix_hash, more_than)
-			table.sort(srv_list.postfix_hash, more_than)
+
+			local tmp = {}
+			for k in pairs(srv_list.prefix_hash) do
+				tmp[#k] = 1
+			end
+			srv_list.prefix_size_hash = {}
+			for k in pairs(tmp) do
+				tinsert(srv_list.prefix_size_hash, k)
+			end
+			tsort(srv_list.prefix_size_hash, more_than)
+
+			srv_list.postfix_size_hash = {}
+			local tmp = {}
+			for k in pairs(srv_list.postfix_hash) do
+				tmp[#k] = 1
+			end
+			for k in pairs(tmp) do
+				tinsert(srv_list.postfix_size_hash, k)
+			end
+			tsort(srv_list.postfix_size_hash, more_than)
 		end
 	end
 end
-
-local function bsearch(a, len)
-	local s,e = 1,#a
-	local mid = 0
-	while s <= e do
-		mid = math.floor((s + e) / 2)
-		local m = #(a[mid][2])
-		if m > len  then
-			s = mid + 1
-		elseif m < len then
-			e = mid - 1
-		else
-			break
-		end
-	end
-	return mid
-end
-
-local NULL = ffi.cast("void*", 0)
 
 local function do_servlet(req, rsp)
 	local match_srv
@@ -370,10 +388,8 @@ local function do_servlet(req, rsp)
 
 		-- longest wildcard name starting with an asterisk, e.g. "*.example.org"
 		if not match_srv then
-			for _,v in ipairs(srv_list.prefix_hash) do
-				local len = #v.host
-				local p = ffi.cast("const char*", host)
-				if C.strncmp(p + hlen - len, v.host, len) == 0 then
+			for _,v in ipairs(srv_list.prefix_size_hash) do
+				if srv_list.prefix_hash[strsub(host, hlen-v+1)] then
 					match_srv = v.srv
 					break
 				end
@@ -382,8 +398,8 @@ local function do_servlet(req, rsp)
 
 		-- longest wildcard name ending with an asterisk, e.g. "mail.*"
 		if not match_srv then
-			for _,v in ipairs(srv_list.postfix_hash) do
-				if C.strncmp(host, v.host, #v.host) == 0 then
+			for _,v in ipairs(srv_list.postfix_size_hash) do
+				if srv_list.postfix_hash[strsub(host, 1, v)] then
 					match_srv = v.srv
 					break
 				end
@@ -393,7 +409,7 @@ local function do_servlet(req, rsp)
 		-- first matching regular expression (in order of appearance in a configuration file)
 		if not match_srv then
 			for _,v in ipairs(srv_list.pattern) do
-				if string.find(host, v.host) then
+				if strfind(host, v.host) then
 					match_srv = v.srv
 					break
 				end
@@ -424,7 +440,7 @@ local function do_servlet(req, rsp)
 		if not match_done then
 			if shash.postfix_hash_len > 0 then
 				local p = C.strrchr(path, 46)
-				if p ~= NULL then
+				if p ~= nil then
 					local postfix = ffi.string(p + 1)
 					servlet = shash.postfix_hash[postfix]
 					if servlet then match_done = true end
@@ -434,10 +450,9 @@ local function do_servlet(req, rsp)
 
 		-- prefix match
 		if not match_done then
-			for i=1, bsearch(shash.prefix_hash, pathlen) do
-				local slcf = shash.prefix_hash[i]
-				local prefix = slcf[2]
-				if C.strncmp(path, prefix, #prefix) == 0 then
+			for _,v in ipairs(shash.prefix_size_hash) do
+				local slcf = shash.prefix_hash[strsub(host, 1, v)]
+				if slcf then
 					servlet = slcf
 					match_done = (slcf[1] == "^~")
 					break
@@ -450,12 +465,12 @@ local function do_servlet(req, rsp)
 			for _,slcf in ipairs(shash.pattern) do
 				local modifier,pat = slcf[1],slcf[2]
 				if modifier == "~" then
-					if string.find(path, pat) then
+					if strfind(path, pat) then
 						servlet = slcf
 						break
 					end
 				elseif modifier == "~*" then
-					if string.find(string.lower(path), string.lower(pat)) then
+					if strfind(string.lower(path), string.lower(pat)) then
 						servlet = slcf
 						break
 					end
