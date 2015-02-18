@@ -1,6 +1,6 @@
 local ffi = require("ffi")
 local C = require("cdef")
-local ep = require("core.epoll_mod")
+local epoll = require("core.epoll_mod")
 
 local SIG_BLOCK = 0
 local SIG_UNBLOCK = 1
@@ -63,7 +63,7 @@ local function init()
 				handler(siginfo)
 			end
 		end}
-		ep.add_event(signal_ev, C.EPOLLIN)
+		epoll.add_event(signal_ev, C.EPOLLIN)
 	end
 end
 

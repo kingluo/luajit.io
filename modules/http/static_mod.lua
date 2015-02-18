@@ -1,6 +1,6 @@
 local ffi = require"ffi"
 local C = require"cdef"
-local ep = require"core.epoll_mod"
+local epoll = require"core.epoll_mod"
 
 local mime_types = {
 	["txt"] = "text/plain",
@@ -45,9 +45,9 @@ local function service(req, rsp, cf)
 			err = "sendfile: socket broekn"
 			break
 		elseif errno == C.EAGAIN then
-			ep.add_event(rsp.sock.ev, C.EPOLLOUT)
+			epoll.add_event(rsp.sock.ev, C.EPOLLOUT)
 			rsp.sock:yield(YIELD_W)
-			ep.del_event(rsp.sock.ev, C.EPOLLOUT)
+			epoll.del_event(rsp.sock.ev, C.EPOLLOUT)
 		elseif errno ~= C.EINTR then
 			err = ffi.string(C.strerror(errno))
 			break

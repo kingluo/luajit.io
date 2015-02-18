@@ -1,7 +1,7 @@
 local ffi = require("ffi")
 local C = require("cdef")
 local rt = ffi.load("rt")
-local ep = require("core.epoll_mod")
+local epoll = require("core.epoll_mod")
 local rbtree = require("core.rbtree")
 
 local g_timer_fd
@@ -107,7 +107,7 @@ local function init()
 		local sec,nsec = get_next_interval()
 		if sec then timerfd_settime(g_timer_fd, sec, nsec) end
 	end
-	ep.add_event(g_timer_ev, C.EPOLLIN)
+	epoll.add_event(g_timer_ev, C.EPOLLIN)
 end
 
 return {

@@ -1,6 +1,6 @@
 local C = require("cdef")
 local ffi = require("ffi")
-local ep = require("core.epoll_mod")
+local epoll = require("core.epoll_mod")
 local timer = require("core.timer_mod")
 require("core.co_mod")
 local utils = require("core.utils_mod")
@@ -44,7 +44,7 @@ local function sock_io_handler(ev, events)
 
 		-- no waiting coroutine
 		-- just unregister the event to avoid indefinite notify
-		ep.del_event(ev)
+		epoll.del_event(ev)
 
 		-- if the sock resides in some pool,
 		-- then remove it from the pool and close it.
@@ -402,9 +402,9 @@ local function send_ll(self, ...)
 				end
 			end
 		elseif errno == EAGAIN then
-			ep.add_event(self.ev, C.EPOLLOUT)
+			epoll.add_event(self.ev, C.EPOLLOUT)
 			self:yield(YIELD_W)
-			ep.del_event(self.ev, C.EPOLLOUT)
+			epoll.del_event(self.ev, C.EPOLLOUT)
 		elseif errno ~= EINTR then
 			self:close()
 			return nil, utils.strerror(errno)
@@ -466,7 +466,7 @@ function tcp_mt.__index.listen(self, backlog, handler)
 	local ret = C.listen(self.fd, backlog)
 	if ret ~= 0 then return nil, utils.strerror() end
 	self.ev.handler = handler
-	ep.add_event(self.ev, C.EPOLLIN)
+	epoll.add_event(self.ev, C.EPOLLIN)
 	return 1
 end
 
@@ -488,7 +488,7 @@ function tcp_mt.__index.accept(self)
 		sock.srv_ip = self.ip
 	end
 	sock.srv_port = self.port
-	ep.add_event(sock.ev, C.EPOLLIN, C.EPOLLRDHUP, C.EPOLLET)
+	epoll.add_event(sock.ev, C.EPOLLIN, C.EPOLLRDHUP, C.EPOLLET)
 	return sock
 end
 
@@ -615,9 +615,9 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 		local errno = ffi.errno()
 		if ret == 0 then break end
 		if errno == EINPROGRESS then
-			ep.add_event(self.ev, C.EPOLLOUT, C.EPOLLIN, C.EPOLLRDHUP, C.EPOLLET)
+			epoll.add_event(self.ev, C.EPOLLOUT, C.EPOLLIN, C.EPOLLRDHUP, C.EPOLLET)
 			self:yield(YIELD_W)
-			ep.del_event(self.ev, C.EPOLLOUT)
+			epoll.del_event(self.ev, C.EPOLLOUT)
 			if self.wtimedout then
 				err = "timeout"
 				break
@@ -779,7 +779,7 @@ local function run(cfg, parse_conf, overwrite_handler)
 					connections = connections + 1
 					if connections >= g_tcp_cfg.worker_connections then
 						print("child pid=" .. C.getpid() .. " unlisten sk")
-						do_all_listen_sk(function(ssock) ep.del_event(ssock.ev) end)
+						do_all_listen_sk(function(ssock) epoll.del_event(ssock.ev) end)
 						wait_listen_sk = false
 					end
 					coroutine.spawn(
@@ -790,7 +790,7 @@ local function run(cfg, parse_conf, overwrite_handler)
 							connections = connections - 1
 							if (not wait_listen_sk) and connections < g_tcp_cfg.worker_connections then
 								print("child pid=" .. C.getpid() .. " listen sk")
-								do_all_listen_sk(function(ssock) ep.add_event(ssock.ev, C.EPOLLIN) end)
+								do_all_listen_sk(function(ssock) epoll.add_event(ssock.ev, C.EPOLLIN) end)
 								wait_listen_sk = true
 							end
 						end,
@@ -802,7 +802,7 @@ local function run(cfg, parse_conf, overwrite_handler)
 			end
 
 			-- init the event loop
-			ep.init()
+			epoll.init()
 
 			-- init signal subsystem
 			signal.init()
@@ -818,7 +818,7 @@ local function run(cfg, parse_conf, overwrite_handler)
 			wait_listen_sk = true
 
 			-- run the event loop
-			ep.run()
+			epoll.run()
 			print("child pid=" .. C.getpid() .. " exit")
 			os.exit(0)
 		end
@@ -826,13 +826,13 @@ local function run(cfg, parse_conf, overwrite_handler)
 
 	-- master event loop
 	print("> parent wait " .. worker_processes .. " child")
-	ep.init()
-	ep.add_prepare_hook(function()
+	epoll.init()
+	epoll.add_prepare_hook(function()
 		assert(worker_processes >= 0)
 		return -1, (worker_processes == 0)
 	end)
 	signal.init()
-	ep.run()
+	epoll.run()
 	print "> parent exit"
 	os.exit(0)
 end
