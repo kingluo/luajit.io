@@ -1,11 +1,11 @@
 local C = require("cdef")
 local ffi = require("ffi")
-local epoll = require("core.epoll_mod")
-local timer = require("core.timer_mod")
-require("core.co_mod")
-local utils = require("core.utils_mod")
-local signal = require("core.signal_mod")
-local dns = require("socket.dns_mod")
+local epoll = require("core.epoll")
+local timer = require("core.timer")
+require("core.coroutine")
+local utils = require("core.utils")
+local signal = require("core.signal")
+local dns = require("socket.dns")
 local dfa_compile = require("core.dfa").compile
 local logging = require("core.logging")
 
@@ -671,7 +671,7 @@ local function tcp_parse_conf(cfg)
 	cfg.gid = grp.gr_gid
 
 	logging.init(cfg)
-	-- logging.import_print()
+	if cfg.log_import_print then logging.import_print() end
 
 	if cfg.strict then require("core.strict") end
 

@@ -1,6 +1,6 @@
 local C = require("cdef")
 local ffi = require("ffi")
-local tcp = require("socket.tcp_mod")
+local tcp = require("socket.tcp")
 local URI = require("uri")
 local uri_decode = require("uri._util").uri_decode
 
@@ -377,12 +377,13 @@ end
 
 local function do_servlet(req, rsp)
 	local match_srv
-	local host = req.headers["host"] or ""
-	local hlen = #host
 	local srv_list = g_http_cfg.srv_tbl[req.sock.srv_port][req.sock.srv_ip]
 		or g_http_cfg.srv_tbl[req.sock.srv_port]["*"]
 
 	if #srv_list > 1 then
+		local host = req.headers["host"] or ""
+		local hlen = #host
+
 		-- exact name
 		match_srv = srv_list.extra_hash[host]
 
@@ -451,7 +452,7 @@ local function do_servlet(req, rsp)
 		-- prefix match
 		if not match_done then
 			for _,v in ipairs(shash.prefix_size_hash) do
-				local slcf = shash.prefix_hash[strsub(host, 1, v)]
+				local slcf = shash.prefix_hash[strsub(path, 1, v)]
 				if slcf then
 					servlet = slcf
 					match_done = (slcf[1] == "^~")

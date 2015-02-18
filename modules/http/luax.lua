@@ -1,7 +1,7 @@
-local lux_cache = {}
+local luax_cache = {}
+local append,format,strsub,strfind = table.insert,string.format,string.sub,string.find
 
 local function parseHashLines(chunk,brackets,esc)
-	local append,format,strsub,strfind = table.insert,string.format,string.sub,string.find
 	local exec_pat = "()$(%b"..brackets..")()"
 
 	local function parseDollarParen(pieces, chunk, s, e)
@@ -43,7 +43,7 @@ end
 --
 -- @string str the template string
 -- @tab[opt] env the environment
-local function lux_compile(str,env)
+local function luax_compile(str,env)
 	env = env or {}
 	if rawget(env,"_parent") then
 		setmetatable(env,{__index = env._parent})
@@ -60,18 +60,18 @@ end
 
 local function service(req, rsp, srvcfg, lcf)
 	local path = req.url:path()
-	if not lux_cache[path] then
+	if not luax_cache[path] then
 		local fpath = {(srvcfg.root or "."), "", path}
-		if lcf.path then fpath[2] = lcf.path end
+		if lcf.alias then fpath[2] = lcf.alias end
 		fpath = table.concat(fpath, "/")
 		local f = io.open(fpath)
 		assert(f)
 		local str = f:read('*a')
 		assert(str)
-		lux_cache[path] = lux_compile(str, {_parent=_G})
+		luax_cache[path] = luax_compile(str, {_parent=_G})
 	end
 
-	local fn = lux_cache[path]
+	local fn = luax_cache[path]
 	local ret,err = pcall(fn, req, rsp, function(s) rsp:say(s) end)
 	if ret == false then
 		return nil,err

@@ -8,8 +8,8 @@ local error = error
 local print = print
 
 local bit = require("bit")
-local tcp = require"socket.tcp_mod"
-local md5 = require"core.md5_mod"
+local tcp = require"socket.tcp"
+local md5 = require"core.md5"
 local ffi = require"ffi"
 local null = ffi.new("void*")
 

@@ -1,6 +1,6 @@
 local ffi = require"ffi"
 local C = require"cdef"
-local epoll = require"core.epoll_mod"
+local epoll = require"core.epoll"
 
 local mime_types = {
 	["txt"] = "text/plain",

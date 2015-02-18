@@ -1,4 +1,4 @@
-local dns = require("socket.dns_mod")
+local dns = require("socket.dns")
 local pg = require("resty.postgres")
 local upload = require("resty.upload")
 

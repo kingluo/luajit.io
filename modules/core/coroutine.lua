@@ -1,5 +1,5 @@
-local timer = require("core.timer_mod")
-local epoll = require("core.epoll_mod")
+local timer = require("core.timer")
+local epoll = require("core.epoll")
 
 local add_timer = timer.add_timer
 local tinsert = table.insert

@@ -1,7 +1,7 @@
 local ffi = require("ffi")
 local C = require("cdef")
 local rt = ffi.load("rt")
-local epoll = require("core.epoll_mod")
+local epoll = require("core.epoll")
 local rbtree = require("core.rbtree")
 
 local g_timer_fd

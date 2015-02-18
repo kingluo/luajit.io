@@ -1,7 +1,7 @@
 local ffi = require("ffi")
 local C = require("cdef")
-require("core.co_mod")
-local signal = require("core.signal_mod")
+require("core.coroutine")
+local signal = require("core.signal")
 
 local requests = {}
 local handler_registered = false
