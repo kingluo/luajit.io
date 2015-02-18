@@ -84,6 +84,7 @@ local function get_next_interval()
 	assert(timer_lt(tv, t))
 
 	local sec = t.tv_sec - tv.tv_sec
+	local nsec
 	if  tv.tv_nsec > t.tv_nsec then
 		sec = sec - 1
 		nsec = t.tv_nsec + 1000*1000*1000 - tv.tv_nsec

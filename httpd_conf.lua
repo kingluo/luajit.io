@@ -2,9 +2,13 @@ package.path = package.path .. ";./modules/?.lua;./modules/?/init.lua;./modules/
 	.. ";/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua"
 package.cpath = package.cpath .. ";./modules/?.so"
 
-require("pl.strict")
-
 require("http") {
+	strict = true,
+	user = "nobody",
+	group = "nogroup",
+	daemon = false,
+	log_level = "debug",
+	log_stderr = true,
 	worker_processes = 1,
 	worker_connections = 2,
 	-- Server blocks

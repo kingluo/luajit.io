@@ -38,6 +38,8 @@ typedef void (*__sighandler_t) (int);
 typedef __sighandler_t sighandler_t;
 sighandler_t signal(int signum, sighandler_t handler);
 
+static const int32_t SI_ASYNCNL = -60;
+
 static const int SIGCHLD=17;
 static const int SIGPIPE=13;
 static const int SIGIO = 29;

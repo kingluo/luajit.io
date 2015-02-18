@@ -67,6 +67,35 @@ void free(void *ptr);
 void *calloc(size_t nmemb, size_t size);
 void *realloc(void *ptr, size_t size);
 
+typedef unsigned int uid_t;
+typedef unsigned int gid_t;
+uid_t getuid(void);
+uid_t geteuid(void);
+int setuid(uid_t uid);
+int setgid(gid_t gid);
+
+struct passwd
+{
+  char *pw_name;
+  char *pw_passwd;
+  uid_t pw_uid;
+  gid_t pw_gid;
+  char *pw_gecos;
+  char *pw_dir;
+  char *pw_shell;
+};
+struct passwd *getpwnam(const char *name);
+struct group {
+   char   *gr_name;       /* group name */
+   char   *gr_passwd;     /* group password */
+   gid_t   gr_gid;        /* group ID */
+   char  **gr_mem;        /* group members */
+};
+struct group *getgrnam(const char *name);
+int initgroups(const char *user, gid_t group);
+
+int daemon(int nochdir, int noclose);
+
 static const int EAGAIN = 11;
 static const int EINTR = 4;
 static const int EINPROGRESS = 115;

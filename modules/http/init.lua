@@ -286,14 +286,14 @@ end
 
 local g_http_cfg
 
-local function http_parse_conf(cf)
-	g_http_cfg = cf
+local function http_parse_conf(cfg)
+	g_http_cfg = cfg
 
 	local function more_than(a,b)
 		return a > b
 	end
 
-	for _,srv in ipairs(cf) do
+	for _,srv in ipairs(cfg) do
 		srv.servlet_hash = {
 			exact_hash={},
 			prefix_hash={},
@@ -325,7 +325,7 @@ local function http_parse_conf(cf)
 		tsort(shash.prefix_size_hash, more_than)
 	end
 
-	for port,addresses in pairs(cf.srv_tbl) do
+	for port,addresses in pairs(cfg.srv_tbl) do
 		for address,srv_list in pairs(addresses) do
 			srv_list.extra_hash = {}
 			srv_list.prefix_hash = {}
@@ -492,6 +492,7 @@ local function do_servlet(req, rsp)
 		end
 		assert(type(fn) == 'function')
 		ret,err = fn(req,rsp,match_srv,servlet)
+		coroutine.wait_descendants()
 		if not err then
 			rsp:flush()
 			if rsp.headers["transfer-encoding"] == "chunked" then

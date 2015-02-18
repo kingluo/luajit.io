@@ -1,18 +1,26 @@
 local timer = require("core.timer_mod")
-local add_timer = timer.add_timer
+local epoll = require("core.epoll_mod")
 
+local add_timer = timer.add_timer
+local tinsert = table.insert
+local tremove = table.remove
+
+local coroutine_create = coroutine.create
+local coroutine_resume = coroutine.resume
+local coroutine_yield = coroutine.yield
+local coroutine_running = coroutine.running
+local coroutine_status = coroutine.status
+
+local co_wait_list = setmetatable({},{__mode="k"})
+local co_wait_list2 = setmetatable({},{__mode="k"})
 local co_idle_list = setmetatable({},{__mode="v"})
 local co_info = {}
 
 local function co_kill(co, parent)
 	if co_info[co] then
-		parent = parent or coroutine.running()
+		parent = parent or coroutine_running()
 		if co_info[co].parent ~= parent then
 			return false,'not direct child'
-		end
-
-		for child_co,_ in pairs(co_info[co].childs) do
-			co_kill(child_co, co)
 		end
 
 		co_info[co] = nil
@@ -20,70 +28,68 @@ local function co_kill(co, parent)
 	return true
 end
 
-local function co_resume(co, ...)
-	local cinfo = co_info[co]
-	if not cinfo then
-		print"coroutine already killed"
-		return false,"coroutine already killed"
-	end
+local function co_resume_ll(co, propagate_err, ret, err, ...)
+	if ret == false and propagate_err then error(err) end
 
-	local cr,r,flag,data = coroutine.resume(co, ...)
-	if cr == false then error(r) end
+	if coroutine_status(co) == "dead" then
+		local cinfo = co_info[co]
 
-	if coroutine.status(co) == "dead" then
-		-- call gc first
 		local gc = cinfo.gc
 		if gc then gc() end
 
-		-- tell parent
 		local parent = cinfo.parent
 		if parent then
-			co_info[parent].childs[co] = nil
-			if cinfo.wait_by_parent then
-				co_resume(parent,r,flag,data)
-			else
-				co_info[parent].exit_childs[co] = {r,flag,data}
+			co_info[parent].exit_childs[co] = {ret, err, ...}
+			if co_wait_list[parent] then
+				co_wait_list[parent] = true
 			end
-		end
 
-		-- kill all active childs
-		for child_co,_ in pairs(cinfo.childs) do
-			co_kill(child_co)
+			local ancestor = cinfo.ancestor
+			if ancestor then
+				ancestor = co_info[ancestor]
+				if ancestor then
+					ancestor.descendants = ancestor.descendants - 1
+				end
+			end
 		end
 
 		co_info[co] = nil
 	end
 
-	return r,flag,data
+	return ret, err, ...
 end
 
-local epoll_hook_registered = false
-local function co_yield_idle(flag, fd, ...)
-	local co = coroutine.running()
+local function co_resume(co, ...)
+	local cinfo = co_info[co]
+	if not cinfo then return false,"coroutine already killed" end
+
+	return co_resume_ll(co, (cinfo.parent ~= nil), coroutine_resume(co, ...))
+end
+
+local epoll_idle_hook_registered = false
+local function co_yield_idle(flag, ...)
+	local co = coroutine_running()
 	assert(co)
 
-	if epoll_hook_registered == false then
-		ep.add_prepare_hook(function()
+	if epoll_idle_hook_registered == false then
+		epoll.add_prepare_hook(function()
 			for i=1,#co_idle_list do
 				co_resume(co_idle_list[1])
-				table.remove(co_idle_list,1)
+				tremove(co_idle_list,1)
 			end
 			return ((#co_idle_list > 0) and 1 or -1)
 		end)
-		epoll_hook_registered = true
+		epoll_idle_hook_registered = true
 	end
-	table.insert(co_idle_list, co)
+	tinsert(co_idle_list, co)
 
-	return coroutine.yield(flag, fd, ...)
+	return coroutine_yield(flag, ...)
 end
 
-local function co_yield(...)
-	return coroutine.yield(...)
-end
+local function co_create(fn, gc)
+	local parent = coroutine_running()
 
-local function co_spawn(fn, gc, ...)
-	local parent = coroutine.running()
-	local co = coroutine.create(function(...)
+	local co = coroutine_create(function(...)
 		-- make sandbox
 		local G = {}
 		G._G = G
@@ -92,58 +98,126 @@ local function co_spawn(fn, gc, ...)
 		setfenv(1, G)
 		return fn(...)
 	end)
-	co_info[co] = {parent=parent, gc=gc,
-		childs=setmetatable({},{__mode="k"}),
-		exit_childs=setmetatable({},{__mode="k"})}
-	if parent then co_info[parent].childs[co] = 1 end
-	co_resume(co, ...)
+
+	local cinfo = {
+		parent = parent,
+		gc = gc,
+		exit_childs = setmetatable({},{__mode="k"})
+	}
+
+	co_info[co] = cinfo
+
+	if parent then
+		cinfo.ancestor = co_info[parent].ancestor or parent
+
+		local ancestor = co_info[cinfo.ancestor]
+		if ancestor then
+			ancestor.descendants = ancestor.descendants + 1
+		end
+	else
+		cinfo.descendants = 0
+	end
+
+	return co
+end
+
+local function co_spawn(fn, gc, ...)
+	local co = co_create(fn, gc)
+	local cr,err = co_resume(co, ...)
+	if cr == false then
+		error(err .. "\n" .. debug.traceback(co), 0)
+	end
 	return co
 end
 
 local function co_sleep(sec)
-	local co = coroutine.running()
+	local co = coroutine_running()
 	assert(co)
 	add_timer(function() co_resume(co) end, sec)
-	co_yield()
+	coroutine_yield()
 end
 
+local epoll_wait_hook_registered = false
 local function co_wait(...)
-	local parent = coroutine.running()
+	local parent = coroutine_running()
 	assert(parent)
 	local n = select('#',...)
-	for i=1,n do
-		local co = select(i,...)
-		local d = co_info[parent].exit_childs[co]
-		if d then
-			co_info[parent].exit_childs[co] = nil
-			return unpack(d)
-		elseif not co_info[co] then
-			return false,'#' .. i .. ': ' .. tostring(co) .. ' not exist'
-		elseif co_info[co].parent ~= parent then
-			return false,'#' .. i .. ': ' .. tostring(co) .. ' not your child'
+	assert(n > 0)
+
+	while true do
+		for i=1,n do
+			local co = select(i,...)
+			local d = co_info[parent].exit_childs[co]
+			if d then
+				co_info[parent].exit_childs[co] = nil
+				return unpack(d)
+			elseif not co_info[co] then
+				return false,'#' .. i .. ': ' .. tostring(co) .. ' not exist'
+			elseif co_info[co].parent ~= parent then
+				return false,'#' .. i .. ': ' .. tostring(co) .. ' not direct child'
+			end
 		end
-	end
-	for i=1,n do
-		local co = select(i,...)
-		co_info[co].wait_by_parent = true
-	end
-	local r,flag,data = co_yield()
-	for i=1,n do
-		local co = select(i,...)
-		if co_info[co] then
-			co_info[co].wait_by_parent = false
+
+		if epoll_wait_hook_registered == false then
+			epoll.add_prepare_hook(function()
+				for co,flag in pairs(co_wait_list) do
+					if flag and co_info[co] then
+						co_resume(co)
+					end
+				end
+				return -1
+			end)
+			epoll_wait_hook_registered = true
 		end
+
+		co_wait_list[parent] = false
+		coroutine_yield()
+		co_wait_list[parent] = nil
 	end
-	return r,flag,data
 end
 
-return {
-	-- functions
-	spawn = co_spawn,
-	wait = co_wait,
-	kill = co_kill,
-	sleep = co_sleep,
-	resume = co_resume,
-	yield = co_yield,
-	yield_idle = co_yield_idle,
-}
+local epoll_wait_hook2_registered = false
+local function wait_descendants()
+	local co = coroutine.running()
+	assert(co)
+	local cinfo = co_info[co]
+	assert(cinfo)
+	if cinfo.descendants == nil or cinfo.descendants == 0 then
+		return
+	end
+
+	if epoll_wait_hook2_registered == false then
+		epoll.add_prepare_hook(function()
+			for co in pairs(co_wait_list2) do
+				local cinfo = co_info[co]
+				if cinfo and cinfo.descendants == 0 then
+					co_resume(co)
+				end
+			end
+			return -1
+		end)
+		epoll_wait_hook2_registered = true
+	end
+
+	co_wait_list2[co] = 1
+	coroutine_yield()
+	co_wait_list2[co] = nil
+end
+
+local function co_wrap(fn, gc)
+	local co = co_create(fn, gc)
+	return function(...)
+		if not co_info[co] then error("coroutine already killed") end
+		return select(2, co_resume_ll(co, true, coroutine_resume(co, ...)))
+	end
+end
+
+coroutine.create = co_create
+coroutine.resume = co_resume
+coroutine.wrap = co_wrap
+coroutine.spawn = co_spawn
+coroutine.wait = co_wait
+coroutine.wait_descendants = wait_descendants
+coroutine.kill = co_kill
+coroutine.sleep = co_sleep
+coroutine.yield_idle = co_yield_idle

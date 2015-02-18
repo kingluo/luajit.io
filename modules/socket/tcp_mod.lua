@@ -2,15 +2,17 @@ local C = require("cdef")
 local ffi = require("ffi")
 local ep = require("core.epoll_mod")
 local timer = require("core.timer_mod")
-local co = require("core.co_mod")
+require("core.co_mod")
 local utils = require("core.utils_mod")
 local signal = require("core.signal_mod")
 local dns = require("socket.dns_mod")
 local dfa_compile = require("core.dfa").compile
+local logging = require("core.logging")
 
 local strfind = string.find
 local strsub = string.sub
 local tinsert = table.insert
+local log = logging.log
 
 local tcp_mt = {__index = {}}
 
@@ -25,18 +27,18 @@ local function sock_io_handler(ev, events)
 
 	if bit.band(events, C.EPOLLIN) ~= 0 then
 		if sock[YIELD_R] then
-			co.resume(sock[YIELD_R])
+			coroutine.resume(sock[YIELD_R])
 		end
 	elseif bit.band(events, C.EPOLLOUT) ~= 0 then
 		if sock[YIELD_W] then
-			co.resume(sock[YIELD_W])
+			coroutine.resume(sock[YIELD_W])
 		end
 	elseif bit.band(events, C.EPOLLRDHUP) ~= 0 then
 		if sock[YIELD_R] then
-			co.resume(sock[YIELD_R])
+			coroutine.resume(sock[YIELD_R])
 			return
 		elseif sock[YIELD_W] then
-			co.resume(sock[YIELD_W])
+			coroutine.resume(sock[YIELD_W])
 			return
 		end
 
@@ -70,7 +72,7 @@ end
 function tcp_mt.__index.yield(self, rw)
 	if self[rw] then return "sock waiting" end
 	self[rw] = coroutine.running()
-	co.yield()
+	coroutine.yield()
 	self[rw] = nil
 end
 
@@ -211,7 +213,7 @@ function tcp_mt.__index.receive(self, pattern)
 		self.rtimer = timer.add_timer(function()
 			self.rtimedout = true
 			if self[YIELD_R] then
-				co.resume(self[YIELD_R])
+				coroutine.resume(self[YIELD_R])
 			end
 		end, self.timeout)
 	end
@@ -418,7 +420,7 @@ function tcp_mt.__index.send(self, ...)
 		self.wtimer = timer.add_timer(function()
 			self.wtimedout = true
 			if self[YIELD_W] then
-				co.resume(self[YIELD_W])
+				coroutine.resume(self[YIELD_W])
 			end
 		end, self.timeout)
 	end
@@ -569,7 +571,7 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 		self.wtimer = timer.add_timer(function()
 			if self[YIELD_W] then
 				self.wtimedout = true
-				co.resume(self[YIELD_W])
+				coroutine.resume(self[YIELD_W])
 			end
 		end, self.timeout)
 	end
@@ -577,7 +579,7 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 	-- resolve host and/or port if needed
 	if strfind(host, "^%d+%.%d+%.%d+%.%d+$") == nil or type(port) ~= "number" then
 		self.resolve_key = dns.resolve(host, port, function(ip, port)
-			co.resume(self[YIELD_W], ip, port)
+			coroutine.resume(self[YIELD_W], ip, port)
 		end)
 		host, port = self:yield(YIELD_W)
 		local err
@@ -655,14 +657,30 @@ end
 
 local g_listen_sk_tbl = {}
 local g_tcp_cfg
-local function tcp_parse_conf(cf)
-	g_tcp_cfg = cf
-	local srv_tbl = {}
-	cf.srv_tbl = srv_tbl
 
-	for _,srv in ipairs(cf) do
+local function tcp_parse_conf(cfg)
+	g_tcp_cfg = cfg
+
+	cfg.user = cfg.user or "nobody"
+	cfg.group = cfg.group or user
+	local pw = C.getpwnam(cfg.user)
+	if pw == NULL then error("invalid user: " .. cfg.user) end
+	cfg.uid = pw.pw_uid
+	local grp = C.getgrnam(cfg.group)
+	if grp == NULL then error("invalid group: " .. cfg.group) end
+	cfg.gid = grp.gr_gid
+
+	logging.init(cfg)
+	-- logging.import_print()
+
+	if cfg.strict then require("core.strict") end
+
+	local srv_tbl = {}
+	cfg.srv_tbl = srv_tbl
+
+	for _,srv in ipairs(cfg) do
 		if not srv.listen then
-			srv.listen = {{address="*", port=80}}
+			srv.listen = {{address="*", port=((C.getuid() == 0) and 80 or 8000)}}
 		end
 		for _,linfo in ipairs(srv.listen) do
 			local port = linfo.port
@@ -717,10 +735,17 @@ local function do_all_listen_sk(func)
 	end
 end
 
+local NULL = ffi.new("void*")
+
 local function run(cfg, parse_conf, overwrite_handler)
 	local conn_handler = overwrite_handler or tcp_handler
+
 	tcp_parse_conf(cfg)
 	if parse_conf then parse_conf(cfg) end
+
+	if g_tcp_cfg.daemon then
+		assert(C.daemon(0,0) == 0)
+	end
 
 	local worker_processes = g_tcp_cfg.worker_processes
 	local sigchld_handler = function(siginfo)
@@ -738,6 +763,12 @@ local function run(cfg, parse_conf, overwrite_handler)
 			print("child pid=" .. C.getpid() .. " enter")
 			signal.del_signal_handler(C.SIGCHLD, sigchld_handler)
 
+			if C.geteuid() == 0 then
+				assert(C.setgid(g_tcp_cfg.gid) == 0)
+				assert(C.initgroups(g_tcp_cfg.user, g_tcp_cfg.gid) == 0)
+				assert(C.setuid(g_tcp_cfg.uid) == 0)
+			end
+
 			local connections = 0
 			local wait_listen_sk = false
 
@@ -751,7 +782,7 @@ local function run(cfg, parse_conf, overwrite_handler)
 						do_all_listen_sk(function(ssock) ep.del_event(ssock.ev) end)
 						wait_listen_sk = false
 					end
-					co.spawn(
+					coroutine.spawn(
 						conn_handler,
 						function()
 							print("child pid=" .. C.getpid() .. " remove connection, cfd=" .. sock.fd)

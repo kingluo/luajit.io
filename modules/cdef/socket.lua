@@ -98,7 +98,8 @@ int getaddrinfo_a(int mode, struct gaicb *list[],
 int gai_error(struct gaicb *req);
 int gai_cancel(struct gaicb *req);
 
-///////// constants
+static const int SIGEV_SIGNAL = 0;
+static const int GAI_NOWAIT = 1;
 
 static const int AF_INET=2;
 static const int SOCKET_STREAM=1;

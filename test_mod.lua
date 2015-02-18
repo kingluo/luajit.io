@@ -1,4 +1,3 @@
-local co = require("core.co_mod")
 local dns = require("socket.dns_mod")
 local pg = require("resty.postgres")
 local upload = require("resty.upload")
@@ -74,15 +73,17 @@ local function parse_form_data(req)
 end
 
 local function service(req, rsp, cf, extra)
-	-- local co1 = co.spawn(function() co.yield(); co.sleep(2); rsp:say("hello world, conf ok!\n") end)
-	-- local co2 = co.spawn(function() rsp:say("hello xxx, conf ok!\n") end)
-	-- co.sleep(0.2)
-	-- assert(co.wait(co1))
-	-- assert(co.wait(co2))
+	local co1 = coroutine.spawn(function() coroutine.yield_idle(); rsp:say("foo\n") end)
+	local co2 = coroutine.spawn(function() rsp:say("bar\n") end)
+	coroutine.sleep(0.2)
+	assert(coroutine.wait(co1))
+	assert(coroutine.wait(co2))
+
 	--while true do
 	-- print(dns.resolve("localhost", 80))
 	-- collectgarbage()
 	--end
+
 	local data,err = parse_form_data(req)
 	for k,v in pairs(data) do
 		print(k,v)
@@ -102,6 +103,7 @@ local function service(req, rsp, cf, extra)
 		-- end
 	-- end
 	-- db:set_keepalive()
+
 	-- local args = req:get_post_args()
 	-- for k,v in pairs(args) do
 		-- print("key=" .. k)
