@@ -16,44 +16,54 @@ local co_wait_list2 = setmetatable({},{__mode="k"})
 local co_idle_list = setmetatable({},{__mode="v"})
 local co_info = {}
 
-local function co_kill(co, parent)
+local function handle_dead_co(co, ...)
+	local cinfo = co_info[co]
+
+	if cinfo.sleep_timer then
+		cinfo.sleep_timer:cancel()
+		cinfo.sleep_timer = nil
+	end
+
+	local gc = cinfo.gc
+	if gc then gc() end
+
+	local parent = cinfo.parent
+	if parent then
+		co_info[parent].exit_childs[co] = {...}
+		if co_wait_list[parent] then
+			co_wait_list[parent] = true
+		end
+
+		local ancestor = cinfo.ancestor
+		if ancestor then
+			ancestor = co_info[ancestor]
+			if ancestor then
+				ancestor.descendants = ancestor.descendants - 1
+			end
+		end
+	end
+
+	co_info[co] = nil
+end
+
+local function co_kill(co)
 	if co_info[co] then
-		parent = parent or coroutine_running()
-		if co_info[co].parent ~= parent then
+		if co_info[co].parent ~= coroutine_running() then
 			return false,'not direct child'
 		end
 
-		co_info[co] = nil
+		handle_dead_co(co, false, "killed")
 	end
 	return true
 end
 
 local function co_resume_ll(co, propagate_err, ret, err, ...)
-	if ret == false and propagate_err then error(err) end
+	if ret == false and propagate_err then
+		error(err)
+	end
 
 	if coroutine_status(co) == "dead" then
-		local cinfo = co_info[co]
-
-		local gc = cinfo.gc
-		if gc then gc() end
-
-		local parent = cinfo.parent
-		if parent then
-			co_info[parent].exit_childs[co] = {ret, err, ...}
-			if co_wait_list[parent] then
-				co_wait_list[parent] = true
-			end
-
-			local ancestor = cinfo.ancestor
-			if ancestor then
-				ancestor = co_info[ancestor]
-				if ancestor then
-					ancestor.descendants = ancestor.descendants - 1
-				end
-			end
-		end
-
-		co_info[co] = nil
+		handle_dead_co(co, ret, err, ...)
 	end
 
 	return ret, err, ...
@@ -61,9 +71,12 @@ end
 
 local function co_resume(co, ...)
 	local cinfo = co_info[co]
-	if not cinfo then return false,"coroutine already killed" end
+	if not cinfo then return
+		false,"coroutine dead"
+	end
 
-	return co_resume_ll(co, (cinfo.parent == nil), coroutine_resume(co, ...))
+	return co_resume_ll(co, (cinfo.parent == nil),
+		coroutine_resume(co, ...))
 end
 
 local epoll_idle_hook_registered = false
@@ -133,7 +146,10 @@ end
 local function co_sleep(sec)
 	local co = coroutine_running()
 	assert(co)
-	add_timer(function() co_resume(co) end, sec)
+	local cinfo = co_info[co]
+	assert(cinfo)
+	cinfo.sleep_timer = add_timer(
+		function() cinfo.sleep_timer = nil; co_resume(co) end, sec)
 	coroutine_yield()
 end
 
