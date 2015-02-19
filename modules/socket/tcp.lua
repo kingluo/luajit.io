@@ -11,6 +11,7 @@ local logging = require("core.logging")
 
 local strfind = string.find
 local strsub = string.sub
+local strmatch = string.match
 local tinsert = table.insert
 local log = logging.log
 
@@ -184,9 +185,9 @@ local function receive_ll(self, pattern)
 			elseif len == 0 then
 				self:close()
 				err = "socket closed"
-			elseif errno == EAGAIN then
+			elseif errno == C.EAGAIN then
 				self:yield(YIELD_R)
-			elseif errno ~= EINTR then
+			elseif errno ~= C.EINTR then
 				self:close()
 				err = utils.strerror(errno)
 			end
@@ -401,11 +402,11 @@ local function send_ll(self, ...)
 					break
 				end
 			end
-		elseif errno == EAGAIN then
+		elseif errno == C.EAGAIN then
 			epoll.add_event(self.ev, C.EPOLLOUT)
 			self:yield(YIELD_W)
 			epoll.del_event(self.ev, C.EPOLLOUT)
-		elseif errno ~= EINTR then
+		elseif errno ~= C.EINTR then
 			self:close()
 			return nil, utils.strerror(errno)
 		end
@@ -435,9 +436,9 @@ function tcp_mt.__index.send(self, ...)
 	return sent,err
 end
 
-local function create_tcp_socket(self)
+local function create_tcp_socket(self, family)
 	assert(self.fd == -1)
-	local fd = C.socket(C.AF_INET, C.SOCKET_STREAM, 0)
+	local fd = C.socket(self.family, C.SOCKET_STREAM, 0)
 	assert(fd > 0)
 	utils.set_nonblock(fd)
 	self.fd = fd
@@ -446,16 +447,37 @@ local function create_tcp_socket(self)
 end
 
 function tcp_mt.__index.bind(self, ip, port)
+	local path = strmatch(ip, "unix:(.*)")
+	if path then
+		C.unlink(path)
+		self.family = C.AF_UNIX
+		ip = path
+	else
+		self.family = C.AF_INET
+	end
+
 	create_tcp_socket(self)
-	local option = ffi.new("int[1]", 1)
-	assert(C.setsockopt(self.fd, C.SOL_SOCKET, C.SO_REUSEADDR, ffi.cast("void*",option), ffi.sizeof("int")) == 0)
-	local addr = ffi.new("struct sockaddr_in")
-	addr.sin_family = C.AF_INET
-	addr.sin_port = C.htons(tonumber(port))
-	C.inet_aton(ip, addr.sin_addr)
-	if C.bind(self.fd, ffi.cast("struct sockaddr*",addr), ffi.sizeof(addr)) == -1 then
+
+	local addr, addrlen
+	if self.family == C.AF_INET then
+		local option = ffi.new("int[1]", 1)
+		assert(C.setsockopt(self.fd, C.SOL_SOCKET, C.SO_REUSEADDR, ffi.cast("void*",option), ffi.sizeof("int")) == 0)
+		addr = ffi.new("struct sockaddr_in")
+		addr.sin_family = C.AF_INET
+		addr.sin_port = C.htons(tonumber(port))
+		C.inet_aton(ip, addr.sin_addr)
+		addrlen = ffi.sizeof(addr)
+	else
+		addr = ffi.new("struct sockaddr_un")
+		addr.sun_family = C.AF_UNIX
+		addr.sun_path = ip
+		addrlen = ffi.offsetof(addr, "sun_path") + #ip + 1
+	end
+
+	if C.bind(self.fd, ffi.cast("struct sockaddr*",addr), addrlen) == -1 then
 		return nil, utils.strerror()
 	end
+
 	self.ip = ip
 	self.port = port
 	return 1
@@ -471,23 +493,32 @@ function tcp_mt.__index.listen(self, backlog, handler)
 end
 
 function tcp_mt.__index.accept(self)
-	local addr = ffi.new("struct sockaddr_in[1]")
+	local addr
+	if self.family == C.AF_INET then
+		addr = ffi.new("struct sockaddr_in[1]")
+	else
+		addr = ffi.new("struct sockaddr_un[1]")
+	end
 	local len = ffi.new("unsigned int[1]", ffi.sizeof(addr))
 	local cfd = C.accept(self.fd, ffi.cast("struct sockaddr *",addr), len)
 	if cfd <= 0 then return nil, utils.strerror() end
-	local val = ffi.cast("unsigned short",C.ntohs(addr[0].sin_port))
-	local port = tonumber(val)
-	local ip = ffi.string(C.inet_ntoa(addr[0].sin_addr))
+
 	local sock = tcp_new(cfd)
-	sock.ip = ip
-	sock.port = port
+	if self.family == C.AF_INET then
+		local val = ffi.cast("unsigned short",C.ntohs(addr[0].sin_port))
+		sock.port = tonumber(val)
+		sock.ip = ffi.string(C.inet_ntoa(addr[0].sin_addr))
+	else
+		sock.ip = ffi.string(addr[0].sun_addr)
+	end
+
 	if self.ip == "*" then
 		assert(C.getsockname(cfd, ffi.cast("struct sockaddr *",addr), len) == 0)
 		sock.srv_ip = ffi.string(C.inet_ntoa(addr[0].sin_addr))
 	else
 		sock.srv_ip = self.ip
 	end
-	sock.srv_port = self.port
+	sock.srv_port = self.port or "unix"
 	epoll.add_event(sock.ev, C.EPOLLIN, C.EPOLLRDHUP, C.EPOLLET)
 	return sock
 end
@@ -532,9 +563,23 @@ end
 function tcp_mt.__index.connect(self, host, port, options_table)
 	if self.connected then return nil, "already connected" end
 
+	local path = strmatch(host, "unix:(.*)")
+	if path then
+		self.family = C.AF_UNIX
+		options_table = port
+		host = path
+	else
+		self.family = C.AF_INET
+	end
+
 	local pname
 	if options_table then pname = options_table.pool end
-	if not pname then pname = host .. ":" .. port end
+	if not pname then
+		pname = host
+		if self.family == C.AF_INET then
+			pname = pname .. ":" .. port
+		end
+	end
 	self.pname = pname
 
 	-- look up the connection pool first
@@ -577,7 +622,8 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 	end
 
 	-- resolve host and/or port if needed
-	if strfind(host, "^%d+%.%d+%.%d+%.%d+$") == nil or type(port) ~= "number" then
+	if self.family == C.AF_INET
+		and (strfind(host, "^%d+%.%d+%.%d+%.%d+$") == nil or type(port) ~= "number") then
 		self.resolve_key = dns.resolve(host, port, function(ip, port)
 			coroutine.resume(self[YIELD_W], ip, port)
 		end)
@@ -603,19 +649,30 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 	create_tcp_socket(self)
 
 	-- do non-blocking connect
-	local err
 	self.ip = host
 	self.port = port
-	local addr = ffi.new("struct sockaddr_in")
-	addr.sin_family = C.AF_INET
-	addr.sin_port = C.htons(tonumber(port))
-	C.inet_aton(host, addr.sin_addr)
+	local addr, addrlen
+	if self.family == C.AF_INET then
+		addr = ffi.new("struct sockaddr_in")
+		addr.sin_family = C.AF_INET
+		addr.sin_port = C.htons(tonumber(port))
+		C.inet_aton(host, addr.sin_addr)
+		addrlen = ffi.sizeof(addr)
+	else
+		addr = ffi.new("struct sockaddr_un")
+		addr.sun_family = C.AF_UNIX
+		addr.sun_path = host
+		addrlen = ffi.offsetof(addr, "sun_path") + #host + 1
+	end
+
+	local err
+
 	while true do
-		local ret = C.connect(self.fd, ffi.cast("struct sockaddr*",addr), ffi.sizeof(addr))
+		local ret = C.connect(self.fd, ffi.cast("struct sockaddr*",addr), addrlen)
 		local errno = ffi.errno()
 		if ret == 0 then break end
-		if errno == EINPROGRESS then
-			epoll.add_event(self.ev, C.EPOLLOUT, C.EPOLLIN, C.EPOLLRDHUP, C.EPOLLET)
+		if errno == C.EINPROGRESS then
+			epoll.add_event(self.ev, C.EPOLLOUT)
 			self:yield(YIELD_W)
 			epoll.del_event(self.ev, C.EPOLLOUT)
 			if self.wtimedout then
@@ -645,6 +702,7 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 		return nil, err
 	end
 
+	epoll.add_event(self.ev, C.EPOLLIN, C.EPOLLRDHUP, C.EPOLLET)
 	self.connected = true
 	return 1
 end
@@ -684,6 +742,12 @@ local function tcp_parse_conf(cfg)
 		end
 		for _,linfo in ipairs(srv.listen) do
 			local port = linfo.port
+			if linfo.address then
+				local path = strmatch(linfo.address, "unix:(.*)")
+				if path then
+					port = "unix"
+				end
+			end
 			if not linfo.address then linfo.address = "*" end
 			local address = linfo.address
 

@@ -4,8 +4,8 @@ local upload = require("resty.upload")
 
 local function getdb()
 	local db = pg:new()
-	db:set_timeout(3000)
-	local ok, err = db:connect({host="127.0.0.1",port=5432,database="test",
+	-- db:set_timeout(3000)
+	local ok, err = db:connect({path="/var/run/postgresql/.s.PGSQL.5432",database="test",
 		user="test",password="test",compact=false})
 	return db,err
 end
@@ -79,30 +79,27 @@ local function service(req, rsp, cf, extra)
 	assert(coroutine.wait(co1))
 	assert(coroutine.wait(co2))
 
-	--while true do
 	-- print(dns.resolve("localhost", 80))
-	-- collectgarbage()
-	--end
 
-	local data,err = parse_form_data(req)
-	for k,v in pairs(data) do
-		print(k,v)
-	end
-
-	-- local db,err = getdb()
-	-- if err then print(err); os.exit(1); end
-	-- local sqlstr = [[
-		-- select * from send_sms_tbl order by id;
-	-- ]]
-	-- local res,err,err_msg,tstatus = db:query(sqlstr)
-	-- if not res then
-		-- print(err)
-	-- else
-		-- for i,v in ipairs(res) do
-			-- print(v.id, v.sendtime, v.status)
-		-- end
+	-- local data,err = parse_form_data(req)
+	-- for k,v in pairs(data) do
+		-- print(k,v)
 	-- end
-	-- db:set_keepalive()
+
+	local db,err = getdb()
+	if err then print(err); os.exit(1); end
+	local sqlstr = [[
+		select * from send_sms_tbl order by id;
+	]]
+	local res,err,err_msg,tstatus = db:query(sqlstr)
+	if not res then
+		print(err)
+	else
+		for i,v in ipairs(res) do
+			print(v.id, v.sendtime, v.status)
+		end
+	end
+	db:set_keepalive()
 
 	-- local args = req:get_post_args()
 	-- for k,v in pairs(args) do
@@ -115,7 +112,8 @@ local function service(req, rsp, cf, extra)
 			-- print("value=" .. tostring(v))
 		-- end
 	-- end
-	return rsp:say("hello world, conf ok!\n")
+
+	return rsp:say("hello world!\n")
 end
 
 return service

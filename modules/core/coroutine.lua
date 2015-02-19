@@ -63,7 +63,7 @@ local function co_resume(co, ...)
 	local cinfo = co_info[co]
 	if not cinfo then return false,"coroutine already killed" end
 
-	return co_resume_ll(co, (cinfo.parent ~= nil), coroutine_resume(co, ...))
+	return co_resume_ll(co, (cinfo.parent == nil), coroutine_resume(co, ...))
 end
 
 local epoll_idle_hook_registered = false

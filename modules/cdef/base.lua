@@ -19,6 +19,8 @@ int ioctl(int d, int request, ...);
 ssize_t sendfile(int out_fd, int in_fd, void *offset, size_t count);
 int open(const char *pathname, int flags);
 
+int unlink(const char *pathname);
+
 typedef int time_t;
 typedef long suseconds_t;
 time_t time(time_t *t);

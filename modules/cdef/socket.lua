@@ -8,6 +8,7 @@ typedef __u32 __be32;
 typedef unsigned short __u16;
 typedef __u16 __be16;
 typedef unsigned short __kernel_sa_family_t;
+typedef unsigned short int sa_family_t;
 
 struct in_addr {
  __be32 s_addr;
@@ -27,6 +28,12 @@ struct sockaddr {
 	short int sa_family;
 	char sa_data[14];
 };
+
+struct sockaddr_un
+  {
+    sa_family_t sun_family;
+    char sun_path[108];
+  };
 
 short int ntohs(short int netshort);
 short int htons(short int hostshort);
@@ -101,6 +108,7 @@ int gai_cancel(struct gaicb *req);
 static const int SIGEV_SIGNAL = 0;
 static const int GAI_NOWAIT = 1;
 
+static const int AF_UNIX=1;
 static const int AF_INET=2;
 static const int SOCKET_STREAM=1;
 static const int SOL_SOCKET=1;

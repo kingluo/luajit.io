@@ -16,16 +16,17 @@ require("http") {
 	worker_connections = 2,
 
 	-- Server blocks
-	-- See http://nginx.org/en/docs/http/request_processing.html
+	-- Refer to http://nginx.org/en/docs/http/request_processing.html
 	{
 		listen = {
-			{port=8080,default_server=1}
+			{port=8080,default_server=true},
+			{address="unix:/var/run/test.sock"}
 		},
 		server_name = {"example.org", "*.example.com", "~my%d+web%.org"},
 		root = "/srv/myserver",
 		default_type = 'text/plain',
 		servlet = {
-			-- See nginx location directive:
+			-- Refer to nginx location directive:
 			-- http://nginx.org/en/docs/http/ngx_http_core_module.html#location
 			-- Add two new modifiers:
 			-- "^" explicitly denotes longest prefix matching
