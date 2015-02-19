@@ -65,7 +65,8 @@ end
 local function tcp_new(fd)
 	fd = fd or -1
 	local ev = {fd=fd, handler=sock_io_handler}
-	local sock = setmetatable({fd=fd, ev=ev, guard=utils.fd_guard(fd)}, tcp_mt)
+	local sock = setmetatable({fd=fd, ev=ev, guard=utils.fd_guard(fd),
+		stats={rbytes=0,wbytes=0}}, tcp_mt)
 	ev.sock = sock
 	return sock
 end
@@ -180,6 +181,7 @@ local function receive_ll(self, pattern)
 
 			local err
 			if len > 0 then
+				self.stats.rbytes = self.stats.rbytes + len
 				rbuf.rp = rbuf.rp + len
 				break
 			elseif len == 0 then
@@ -386,6 +388,7 @@ local function send_ll(self, ...)
 		local len = C.writev(self.fd, iovec[idx], iovcnt)
 		local errno = ffi.errno()
 		if len > 0 then
+			self.stats.wbytes = self.stats.wbytes + len
 			sent = sent + len
 			if sent == bytes then return sent end
 			for i=idx,idx+iovcnt-1 do
@@ -584,30 +587,28 @@ function tcp_mt.__index.connect(self, host, port, options_table)
 
 	-- look up the connection pool first
 	local pool = pools[pname]
-	if pool then
+	if pool and pool.size > 0 then
 		local sock = pool.next
-		if sock then
-			sock.keepalive_timer:cancel()
-			sock.keepalive_timer = nil
+		sock.keepalive_timer:cancel()
+		sock.keepalive_timer = nil
 
-			-- copy fields
-			self.ip = sock.ip
-			self.port = sock.port
-			self.fd = sock.fd
-			self.ev = sock.ev
-			self.ev.sock = self
-			self.guard = sock.guard
-			self.reusedtimes = sock.reusedtimes
-			if not self.reusedtimes then self.reusedtimes = 0 end
-			self.reusedtimes = self.reusedtimes + 1
-			self.connected = true
+		-- copy fields
+		self.ip = sock.ip
+		self.port = sock.port
+		self.fd = sock.fd
+		self.ev = sock.ev
+		self.ev.sock = self
+		self.guard = sock.guard
+		self.reusedtimes = sock.reusedtimes
+		if not self.reusedtimes then self.reusedtimes = 0 end
+		self.reusedtimes = self.reusedtimes + 1
+		self.connected = true
 
-			-- update the pool
-			sock.next.prev = pool
-			pool.next = sock.next
-			pool.size = pool.size - 1
-			return 1
-		end
+		-- update the pool
+		sock.next.prev = pool
+		pool.next = sock.next
+		pool.size = pool.size - 1
+		return 1
 	end
 
 	-- set connect timer
