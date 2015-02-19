@@ -79,6 +79,8 @@ end
 local function rbtree_new(compare_fn)
 	local tree = {}
 	tree.color = BLACK
+    tree.left = tree
+    tree.right = tree
 	tree.root = tree
 	tree.sentinel = tree
 	tree.compare_fn = compare_fn or builtin_compare
