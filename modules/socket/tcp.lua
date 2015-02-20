@@ -549,7 +549,7 @@ function tcp_mt.__index.setkeepalive(self, timeout, size)
 		pool.size = pool.size + 1
 	end
 
-	local timeout = timeout or 60
+	timeout = timeout and (timeout / 1000) or 60
 	if timeout > 0 then
 		self.keepalive_timer = timer.add_timer(function()
 			self.next.prev = self.prev
