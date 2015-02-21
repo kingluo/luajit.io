@@ -15,6 +15,10 @@ require("http") {
 	worker_processes = 1,
 	worker_connections = 2,
 
+	lua_shared_dict = {
+		test = "10M",
+	},
+
 	-- Server blocks
 	-- Refer to http://nginx.org/en/docs/http/request_processing.html
 	{
@@ -28,10 +32,11 @@ require("http") {
 		servlet = {
 			-- Refer to nginx location directive:
 			-- http://nginx.org/en/docs/http/ngx_http_core_module.html#location
-			-- Add two new modifiers:
-			-- "^" explicitly denotes longest prefix matching
-			-- "$" means postfix matching, if matched, regexp match would be skipped
-			-- "f" means matching function, with same matching priority as regexp matching
+			-- Add three new modifiers:
+			-- "^" explicitly longest prefix matching
+			-- "$" postfix matching, just after exact matching, return if matched
+			-- "f" matching function for arbitrary matching, with same priority as regexp matching
+			--
 			-- {<modifier>, (<pattern> | <match function>), (<module> | <inline function>), ...}
 			{"=", "/test2", "test"},
 			{"^", "/foobar", "foobar_mod"},

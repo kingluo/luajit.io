@@ -1,6 +1,7 @@
 local dns = require("socket.dns")
 local pg = require("resty.postgres")
 local upload = require("resty.upload")
+local ffi = require"ffi"
 
 local function getdb()
 	local db = pg:new()
@@ -72,20 +73,92 @@ local function parse_form_data(req)
 	return data, err, filenames
 end
 
-local function service(req, rsp, cf, extra)
-	local co1 = coroutine.spawn(function() coroutine.yield_idle(); rsp:say("foo\n") end)
-	local co2 = coroutine.spawn(function() rsp:say("bar\n") end)
-	coroutine.sleep(0.2)
-	assert(coroutine.wait(co1))
-	assert(coroutine.wait(co2))
+local null = ffi.new("void*")
+local function test_redis()
+	local redis = require "resty.redis"
+	local red = redis:new()
 
-	-- print(dns.resolve("localhost", 80))
+	-- red:set_timeout(1000) -- 1 sec
 
-	-- local data,err = parse_form_data(req)
-	-- for k,v in pairs(data) do
-		-- print(k,v)
+	-- or connect to a unix domain socket file listened
+	-- by a redis server:
+	--     local ok, err = red:connect("unix:/path/to/redis.sock")
+
+	local ok, err = red:connect("127.0.0.1", 6379)
+	if not ok then
+		print("failed to connect: ", err)
+		return
+	end
+
+	ok, err = red:set("dog", "an animal")
+	if not ok then
+		print("failed to set dog: ", err)
+		return
+	end
+
+	print("set result: ", ok)
+
+	local res, err = red:get("dog")
+	if not res then
+		print("failed to get dog: ", err)
+		return
+	end
+
+	if res == null then
+		print("dog not found.")
+		return
+	end
+
+	print("dog: ", res)
+
+	red:init_pipeline()
+	red:set("cat", "Marry")
+	red:set("horse", "Bob")
+	red:get("cat")
+	red:get("horse")
+	local results, err = red:commit_pipeline()
+	if not results then
+		print("failed to commit the pipelined requests: ", err)
+		return
+	end
+
+	for i, res in ipairs(results) do
+		if type(res) == "table" then
+			if not res[1] then
+				print("failed to run command ", i, ": ", res[2])
+			else
+				-- process the table value
+			end
+		else
+			-- process the scalar value
+		end
+	end
+
+	-- put it into the connection pool of size 100,
+	-- with 10 seconds max idle time
+	local ok, err = red:set_keepalive(10000, 100)
+	if not ok then
+		print("failed to set keepalive: ", err)
+		return
+	end
+
+	-- or just close the connection right away:
+	-- local ok, err = red:close()
+	-- if not ok then
+	--     print("failed to close: ", err)
+	--     return
 	-- end
+end
 
+local function test_shdict()
+	local test = require("core.shdict").shared.test
+	test:set("foo","bar")
+	print(test:get("foo"))
+	test:set("foo",98767)
+	print(test:get("foo"))
+end
+
+local function test_db(rsp)
 	local db,err = getdb()
 	if err then print(err); os.exit(1); end
 	local sqlstr = [[
@@ -96,24 +169,58 @@ local function service(req, rsp, cf, extra)
 		print(err)
 	else
 		for i,v in ipairs(res) do
-			print(v.id, v.sendtime, v.status)
+			coroutine.sleep(1)
+			rsp:say(table.concat({v.id, v.sendtime, v.status}, ","), "\n")
+			rsp:flush()
 		end
 	end
 	db:set_keepalive()
-
-	-- local args = req:get_post_args()
-	-- for k,v in pairs(args) do
-		-- print("key=" .. k)
-		-- if type(v) == "table" then
-			-- for _,v1 in ipairs(v) do
-				-- print("value=" .. v1)
-			-- end
-		-- else
-			-- print("value=" .. tostring(v))
-		-- end
-	-- end
-
-	return rsp:say("hello world!\n")
 end
 
-return service
+local function test_post_args()
+	local args = req:get_post_args()
+	for k,v in pairs(args) do
+		print("key=" .. k)
+		if type(v) == "table" then
+			for _,v1 in ipairs(v) do
+				print("value=" .. v1)
+			end
+		else
+			print("value=" .. tostring(v))
+		end
+	end
+end
+
+local function test_coroutine(rsp)
+	local co1 = coroutine.spawn(
+		function()
+			local data,err = parse_form_data(req)
+			for k,v in pairs(data) do
+				coroutine.sleep(1)
+				rsp:say(k,":",v,"\n")
+				rsp:flush()
+			end
+			rsp:say("foo\n")
+		end
+	)
+
+	local co2 = coroutine.spawn(
+		function()
+			rsp:say(dns.resolve("localhost", 80), "\n")
+			rsp:flush()
+			coroutine.sleep(2)
+			rsp:say("bar\n")
+			rsp:flush()
+		end
+	)
+
+	coroutine.sleep(1)
+	coroutine.kill(co1)
+	print(coroutine.wait(co1))
+	print(coroutine.wait(co2))
+end
+
+return function(req, rsp, cf, extra)
+	test_shdict()
+	return rsp:say("hello world!\n")
+end

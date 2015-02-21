@@ -3,6 +3,9 @@ local ffi = require("ffi")
 if ffi.arch == "x86" then
 ffi.cdef[[
 typedef int ssize_t;
+typedef unsigned int mode_t;
+typedef int __pid_t;
+
 extern ssize_t read(int fd, void *buf, size_t count);
 extern ssize_t write(int fd, const void *buf, size_t count);
 struct iovec {
@@ -17,7 +20,7 @@ int close(int fd);
 int ioctl(int d, int request, ...);
 
 ssize_t sendfile(int out_fd, int in_fd, void *offset, size_t count);
-int open(const char *pathname, int flags);
+int open(const char *pathname, int flags, ...);
 
 int unlink(const char *pathname);
 
@@ -97,6 +100,39 @@ struct group *getgrnam(const char *name);
 int initgroups(const char *user, gid_t group);
 
 int daemon(int nochdir, int noclose);
+
+int mkdir(const char *pathname, mode_t mode);
+int rmdir(const char *pathname);
+int chown(const char *path, uid_t owner, gid_t group);
+int fchown(int fd, uid_t owner, gid_t group);
+int mount(const char *source, const char *target,
+		 const char *filesystemtype, unsigned long mountflags,
+		 const void *data);
+int umount(const char *target);
+int chmod(const char *path, mode_t mode);
+
+typedef long int __off_t;
+struct flock
+  {
+    short int l_type;
+    short int l_whence;
+
+    __off_t l_start;
+    __off_t l_len;
+
+
+
+
+    __pid_t l_pid;
+  };
+int fcntl(int fd, int cmd, ... /* arg */ );
+
+static const int F_SETLKW = 7;
+static const short int F_RDLCK         =0;
+static const short int F_WRLCK         =1;
+static const short int F_UNLCK         =2;
+static const short int SEEK_SET         =0;
+static const unsigned long MS_MGC_VAL = 0xc0ed0000;
 
 static const int EAGAIN = 11;
 static const int EINTR = 4;

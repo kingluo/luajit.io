@@ -502,15 +502,17 @@ local function do_servlet(req, rsp)
 		end
 		if err then
 			print(err)
+			-- TODO 500 page
 			return false
 		end
 	else
 		print "no servlet"
+		-- TODO 404 page
 		return false
 	end
 end
 
-local function http_request_handler(sock)
+local function http_handler(sock)
 	while true do
 		local line,err = sock:receive()
 		if err then print(err); break end
@@ -524,15 +526,18 @@ local function http_request_handler(sock)
 		local headers = receive_headers(sock)
 		local req = http_req_new(method, uri, headers, sock)
 		local rsp = http_rsp_new(req, sock)
-		local success = do_servlet(req, rsp)
-		if (success == false) or headers["connection"] == "close" then
+		local ret = do_servlet(req, rsp)
+		-- TODO
+		-- 1. discard request body if needed
+		-- 2. response error pages according to ret
+		if headers["connection"] == "close" then
 			break
 		end
 	end
 end
 
 local function run(cfg)
-	return tcp(cfg, http_parse_conf, http_request_handler)
+	return tcp(cfg, http_parse_conf, http_handler)
 end
 
 return run
