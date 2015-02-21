@@ -8,6 +8,7 @@ local signal = require("core.signal")
 local dns = require("socket.dns")
 local dfa_compile = require("core.dfa").compile
 local logging = require("core.logging")
+local shdict = require("core.shdict")
 
 local strfind = string.find
 local strsub = string.sub
@@ -734,6 +735,8 @@ local function tcp_parse_conf(cfg)
 
 	if cfg.strict then require("core.strict") end
 
+	shdict.init(cfg)
+
 	local srv_tbl = {}
 	cfg.srv_tbl = srv_tbl
 
@@ -897,7 +900,11 @@ local function run(cfg, parse_conf, overwrite_handler)
 		return -1, (worker_processes == 0)
 	end)
 	signal.init()
+	signal.add_signal_handler(C.SIGINT, function()
+		shdict.fini()
+	end)
 	epoll.run()
+	shdict.fini()
 	print "> parent exit"
 	os.exit(0)
 end
