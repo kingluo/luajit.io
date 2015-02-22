@@ -4,5 +4,6 @@ require"cdef.signal"
 require"cdef.epoll"
 require"cdef.socket"
 require"cdef.syslog"
+require"cdef.ssl"
 
 return require"ffi".C

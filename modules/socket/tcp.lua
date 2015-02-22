@@ -9,6 +9,8 @@ local dns = require("socket.dns")
 local dfa_compile = require("core.dfa").compile
 local logging = require("core.logging")
 local shdict = require("core.shdict")
+local ssl = ffi.load("ssl")
+local sslctx
 
 local strfind = string.find
 local strsub = string.sub
@@ -63,11 +65,101 @@ local function sock_io_handler(ev, events)
 	end
 end
 
+local function socket_read(self, rbuf, size)
+	local len = C.read(self.fd, rbuf.rp, size)
+	local errno = ffi.errno()
+
+	local err
+	if len > 0 then
+		rbuf.rp = rbuf.rp + len
+	elseif len == 0 then
+		self:close()
+		err = "socket closed"
+	elseif errno == C.EAGAIN then
+		self:yield(YIELD_R)
+	elseif errno ~= C.EINTR then
+		self:close()
+		err = utils.strerror(errno)
+	end
+	return len, err
+end
+
+local function socket_writev(self, iovec, idx, iovcnt)
+	return C.writev(self.fd, iovec[idx], iovcnt)
+end
+
+local function create_ssl(self)
+	if not self.ssl then
+		self.ssl = ssl.SSL_new(sslctx)
+		ssl.SSL_set_fd(self.ssl, self.fd)
+		if self.connected then
+			ssl.SSL_set_connect_state(self.ssl)
+		else
+			ssl.SSL_set_accept_state(self.ssl)
+		end
+	end
+end
+
+local function ssl_read(self, rbuf, size)
+	create_ssl(self)
+	local len = ssl.SSL_read(self.ssl, rbuf.rp, size)
+	local err
+	if len > 0 then
+		rbuf.rp = rbuf.rp + len
+	else
+		local sslerr = ssl.SSL_get_error(self.ssl, len)
+		if sslerr == C.SSL_ERROR_ZERO_RETURN then
+			self:close()
+			err = "closed"
+		elseif sslerr == C.SSL_ERROR_WANT_READ then
+			self:yield(YIELD_R)
+		elseif sslerr == C.SSL_ERROR_WANT_WRITE then
+			epoll.add_event(self.ev, C.EPOLLOUT)
+			self:yield(YIELD_W)
+			epoll.del_event(self.ev, C.EPOLLOUT)
+		elseif sslerr == C.SSL_ERROR_SYSCALL then
+			local errno = ffi.errno()
+			if errno == C.EAGAIN then
+				self:yield(YIELD_R)
+			elseif errno ~= C.EINTR then
+				self:close()
+				err = utils.strerror(errno)
+			end
+		end
+	end
+	return len, err
+end
+
+local function ssl_write(self, iovec, idx, iovcnt)
+	create_ssl(self)
+	local buf = ffi.new("char[4096*4]")
+	local len = 0
+	for i=0,iovcnt-1 do
+		local iovec = iovec[idx + i]
+		ffi.copy(buf + len, iovec.iov_base, iovec.iov_len)
+		len = len + iovec.iov_len
+	end
+	local len = ssl.SSL_write(self.ssl, buf, len)
+	if len <= 0 then
+		local sslerr = ssl.SSL_get_error(self.ssl, len)
+		if sslerr == C.SSL_ERROR_WANT_READ then
+			self:yield(YIELD_R)
+		elseif sslerr == C.SSL_ERROR_WANT_WRITE then
+			epoll.add_event(self.ev, C.EPOLLOUT)
+			self:yield(YIELD_W)
+			epoll.del_event(self.ev, C.EPOLLOUT)
+		else
+			error("what now?")
+		end
+	end
+	return len
+end
+
 local function tcp_new(fd)
 	fd = fd or -1
 	local ev = {fd=fd, handler=sock_io_handler}
 	local sock = setmetatable({fd=fd, ev=ev, guard=utils.fd_guard(fd),
-		stats={rbytes=0,wbytes=0}}, tcp_mt)
+		stats={rbytes=0,consume=0,wbytes=0}, hook={read=socket_read,write=socket_writev}}, tcp_mt)
 	ev.sock = sock
 	return sock
 end
@@ -81,6 +173,7 @@ end
 
 function tcp_mt.__index.close(self)
 	if not self.closed then
+		if self.hook.close then self.hook.close(self) end
 		C.close(self.fd)
 		self.guard.fd = -1
 		self.closed = true
@@ -113,12 +206,23 @@ local function receive_ll(self, pattern)
 
 	while true do
 		local avaliable = rbuf.rp - rbuf.cp
+		local no_quota = false
+
+		if self.read_quota then
+			local quota = self.read_quota - self.stats.consume
+			if avaliable >= quota then
+				avaliable = quota
+				no_quota = true
+			end
+		end
+
 		if avaliable > 0 then
 			if pattern == "*l" then
 				local cp = C.memchr(rbuf.cp, eol2, avaliable)
 				cp = ffi.cast("char*", cp)
 				if cp ~= nil then
 					local sz = cp - rbuf.buf
+					self.stats.consume = self.stats.consume + sz + 1
 					if sz > 0 then
 						local p = cp - 1
 						if p[0] == eol1 then
@@ -132,18 +236,23 @@ local function receive_ll(self, pattern)
 					rbuf.rp = rbuf.buf + sz
 					return s
 				else
-					rbuf.cp = rbuf.rp
+					rbuf.cp = rbuf.cp + avaliable
 				end
 			elseif typ == "number" then
-				local sz = rbuf.rp - rbuf.buf
-				if sz >= pattern then
+				rbuf.cp = rbuf.cp + avaliable
+				if rbuf.cp - rbuf.buf >= pattern then
 					local s = ffi.string(rbuf.buf, pattern)
-					C.memmove(rbuf.buf, rbuf.buf + pattern, sz - pattern)
-					rbuf.rp = rbuf.buf + sz - pattern
+					local sz = rbuf.rp - rbuf.buf - pattern
+					C.memmove(rbuf.buf, rbuf.buf + pattern, sz)
+					rbuf.cp = rbuf.buf
+					rbuf.rp = rbuf.buf + sz
+					self.stats.consume = self.stats.consume + pattern
 					return s
 				end
 			elseif typ == "function" then
-				local r,err = pattern(self.rbuf)
+				local oldcp = rbuf.cp
+				local r,err = pattern(self.rbuf, avaliable)
+				self.stats.consume = self.stats.consume + (rbuf.cp - oldcp)
 				local sz = rbuf.rp - rbuf.cp
 				C.memmove(rbuf.buf, rbuf.cp, sz)
 				rbuf.cp = rbuf.buf
@@ -152,6 +261,19 @@ local function receive_ll(self, pattern)
 					return r,err
 				end
 			end
+		end
+
+		if no_quota then
+			local s = ffi.string(rbuf.buf, rbuf.cp - rbuf.buf)
+			local sz = rbuf.rp - rbuf.cp
+			C.memmove(rbuf.buf, rbuf.cp, sz)
+			rbuf.cp = rbuf.buf
+			rbuf.rp = rbuf.buf + sz
+			self.stats.consume = self.stats.consume + #s
+			if pattern == "*a" then
+				return s
+			end
+			return nil, "closed", s
 		end
 
 		local sz = rbuf.rp - rbuf.buf
@@ -177,31 +299,18 @@ local function receive_ll(self, pattern)
 				return nil, "timeout", s
 			end
 
-			local len = C.read(self.fd, rbuf.rp, rbuf.size - sz)
-			local errno = ffi.errno()
-
-			local err
-			if len > 0 then
-				self.stats.rbytes = self.stats.rbytes + len
-				rbuf.rp = rbuf.rp + len
-				break
-			elseif len == 0 then
-				self:close()
-				err = "socket closed"
-			elseif errno == C.EAGAIN then
-				self:yield(YIELD_R)
-			elseif errno ~= C.EINTR then
-				self:close()
-				err = utils.strerror(errno)
-			end
-
+			local len, err = self.hook.read(self, rbuf, rbuf.size - (rbuf.rp - rbuf.buf))
+			if len and len > 0 then self.stats.rbytes = self.stats.rbytes + len end
 			if err then
 				local s = ffi.string(rbuf.buf, rbuf.rp - rbuf.buf)
+				self.stats.consume = self.stats.consume + #s
 				if pattern == "*a" then
 					return s
 				end
 				return nil, err, s
 			end
+
+			if len > 0 then break end
 		end
 	end
 end
@@ -268,9 +377,9 @@ function tcp_mt.__index.receiveuntil(self, pattern, options)
 			return r
 		end
 
-		return self:receive(function(rbuf)
+		return self:receive(function(rbuf, avaliable)
 			local cp = rbuf.cp
-			while cp ~= rbuf.rp do
+			while cp - rbuf.cp < avaliable do
 				local c = ffi.string(cp, 1)
 				cp = cp + 1
 				node = node[c]
@@ -386,7 +495,7 @@ local function send_ll(self, ...)
 		end
 		local iovcnt = n_iovec % MAX_IOVCNT
 		if iovcnt == 0 then iovcnt = MAX_IOVCNT end
-		local len = C.writev(self.fd, iovec[idx], iovcnt)
+		local len = self.hook.write(self, iovec, idx, iovcnt)
 		local errno = ffi.errno()
 		if len > 0 then
 			self.stats.wbytes = self.stats.wbytes + len
@@ -737,6 +846,14 @@ local function tcp_parse_conf(cfg)
 
 	shdict.init(cfg)
 
+	if cfg.ssl_certificate then
+		ssl.SSL_library_init()
+		sslctx = ssl.SSL_CTX_new(ssl.SSLv23_method())
+		ssl.SSL_CTX_set_cipher_list(sslctx, cfg.ssl_ciphers)
+		ssl.SSL_CTX_use_certificate_file(sslctx, cfg.ssl_certificate, C.SSL_FILETYPE_PEM)
+		ssl.SSL_CTX_use_PrivateKey_file(sslctx, cfg.ssl_certificate_key, C.SSL_FILETYPE_PEM)
+	end
+
 	local srv_tbl = {}
 	cfg.srv_tbl = srv_tbl
 
@@ -759,6 +876,7 @@ local function tcp_parse_conf(cfg)
 
 			if not srv_tbl[port][address] then
 				srv_tbl[port][address] = {}
+				srv_tbl[port][address]["linfo"] = linfo
 				if linfo.default_server then
 					srv_tbl[port][address]["default_server"] = srv
 				end
@@ -771,12 +889,14 @@ local function tcp_parse_conf(cfg)
 	for port,addresses in pairs(srv_tbl) do
 		if addresses["*"] then
 			local ssock = tcp_new()
+			ssock.linfo = addresses["*"].linfo
 			local r,err = ssock:bind("*", port)
 			if err then error(err) end
 			g_listen_sk_tbl[ssock.fd] = ssock
 		else
-			for address,_ in pairs(addresses) do
+			for address,srv_list in pairs(addresses) do
 				local ssock = tcp_new()
+				ssock.linfo = srv_list.linfo
 				local r,err = ssock:bind(address, port)
 				if err then error(err) end
 				g_listen_sk_tbl[ssock.fd] = ssock
@@ -842,6 +962,10 @@ local function run(cfg, parse_conf, overwrite_handler)
 
 			local ssock_handler = function(ev)
 				local sock,err = ev.sock:accept()
+				if ev.sock.linfo.ssl then
+					sock.hook.read = ssl_read
+					sock.hook.write = ssl_write
+				end
 				if sock then
 					print("child pid=" .. C.getpid() .. " get new connection, cfd=" .. sock.fd .. ", port=" .. sock.port)
 					connections = connections + 1

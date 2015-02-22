@@ -9,7 +9,7 @@ local type = type
 -- local print = print
 
 
-local _M = { _VERSION = '0.08' }
+local _M = { _VERSION = '0.09' }
 
 
 local MAX_LINE_SIZE = 512
@@ -94,12 +94,12 @@ end
 local function discard_line(self)
     local read_line = self.read_line
 
-    local line, err = self.read_line(MAX_LINE_SIZE)
+    local line, err = read_line(MAX_LINE_SIZE)
     if not line then
         return nil, err
     end
 
-    local dummy, err = self.read_line(1)
+    local dummy, err = read_line(1)
     if dummy then
         return nil, "line too long: " .. line .. dummy .. "..."
     end
@@ -142,7 +142,7 @@ local function read_body_part(self)
 
         local data = sock:receive(2)
         if data == "--" then
-            local ok, err = discard_line(self)
+            local ok, err = discard_rest(self)
             if not ok then
                 return nil, nil, err
             end
@@ -233,6 +233,7 @@ local function read_preamble(self)
         end
 
         -- discard the preamble data chunk
+        -- print("read preamble: ", preamble)
     end
 
     local ok, err = discard_line(self)

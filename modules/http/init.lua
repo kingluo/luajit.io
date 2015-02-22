@@ -526,7 +526,9 @@ local function http_handler(sock)
 		local headers = receive_headers(sock)
 		local req = http_req_new(method, uri, headers, sock)
 		local rsp = http_rsp_new(req, sock)
+		sock.read_quota = sock.stats.consume + (headers["content-length"] or 0)
 		local ret = do_servlet(req, rsp)
+		sock.read_quota = nil
 		-- TODO
 		-- 1. discard request body if needed
 		-- 2. response error pages according to ret

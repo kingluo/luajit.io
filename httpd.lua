@@ -15,6 +15,10 @@ require("http") {
 	worker_processes = 1,
 	worker_connections = 2,
 
+	ssl_certificate = "/opt/carbox/sslkey/server.crt",
+	ssl_certificate_key = "/opt/carbox/sslkey/server.key",
+	ssl_ciphers = "RC4:HIGH:!aNULL:!MD5",
+
 	lua_shared_dict = {
 		test = "10M",
 	},
@@ -23,7 +27,7 @@ require("http") {
 	-- Refer to http://nginx.org/en/docs/http/request_processing.html
 	{
 		listen = {
-			{port=8080,default_server=true},
+			{port=8080,default_server=true,ssl=true},
 			{address="unix:/var/run/test.sock"}
 		},
 		server_name = {"example.org", "*.example.com", "~my%d+web%.org"},

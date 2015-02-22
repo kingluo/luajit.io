@@ -220,7 +220,16 @@ local function test_coroutine(rsp)
 	print(coroutine.wait(co2))
 end
 
+local function test_upload(req, rsp)
+	local data,err = parse_form_data(req)
+	if err then error(err) end
+	for k,v in pairs(data) do
+		rsp:say(k,":",v,"\n")
+	end
+end
+
 return function(req, rsp, cf, extra)
-	test_shdict()
+	-- test_shdict()
+	test_upload(req, rsp)
 	return rsp:say("hello world!\n")
 end
