@@ -5,12 +5,12 @@ local timer = require("core.timer")
 require("core.coroutine")
 local utils = require("core.utils")
 local signal = require("core.signal")
-local dns = require("socket.dns")
 local dfa_compile = require("core.dfa").compile
 local logging = require("core.logging")
 local shdict = require("core.shdict")
-local ssl = ffi.load("ssl")
-local sslctx
+
+local dns = require("socket.dns")
+local ssl = require("socket.ssl")
 
 local strfind = string.find
 local strsub = string.sub
@@ -86,73 +86,6 @@ end
 
 local function socket_writev(self, iovec, idx, iovcnt)
 	return C.writev(self.fd, iovec[idx], iovcnt)
-end
-
-local function create_ssl(self)
-	if not self.ssl then
-		self.ssl = ssl.SSL_new(sslctx)
-		ssl.SSL_set_fd(self.ssl, self.fd)
-		if self.connected then
-			ssl.SSL_set_connect_state(self.ssl)
-		else
-			ssl.SSL_set_accept_state(self.ssl)
-		end
-	end
-end
-
-local function ssl_read(self, rbuf, size)
-	create_ssl(self)
-	local len = ssl.SSL_read(self.ssl, rbuf.rp, size)
-	local err
-	if len > 0 then
-		rbuf.rp = rbuf.rp + len
-	else
-		local sslerr = ssl.SSL_get_error(self.ssl, len)
-		if sslerr == C.SSL_ERROR_ZERO_RETURN then
-			self:close()
-			err = "closed"
-		elseif sslerr == C.SSL_ERROR_WANT_READ then
-			self:yield(YIELD_R)
-		elseif sslerr == C.SSL_ERROR_WANT_WRITE then
-			epoll.add_event(self.ev, C.EPOLLOUT)
-			self:yield(YIELD_W)
-			epoll.del_event(self.ev, C.EPOLLOUT)
-		elseif sslerr == C.SSL_ERROR_SYSCALL then
-			local errno = ffi.errno()
-			if errno == C.EAGAIN then
-				self:yield(YIELD_R)
-			elseif errno ~= C.EINTR then
-				self:close()
-				err = utils.strerror(errno)
-			end
-		end
-	end
-	return len, err
-end
-
-local function ssl_write(self, iovec, idx, iovcnt)
-	create_ssl(self)
-	local buf = ffi.new("char[4096*4]")
-	local len = 0
-	for i=0,iovcnt-1 do
-		local iovec = iovec[idx + i]
-		ffi.copy(buf + len, iovec.iov_base, iovec.iov_len)
-		len = len + iovec.iov_len
-	end
-	local len = ssl.SSL_write(self.ssl, buf, len)
-	if len <= 0 then
-		local sslerr = ssl.SSL_get_error(self.ssl, len)
-		if sslerr == C.SSL_ERROR_WANT_READ then
-			self:yield(YIELD_R)
-		elseif sslerr == C.SSL_ERROR_WANT_WRITE then
-			epoll.add_event(self.ev, C.EPOLLOUT)
-			self:yield(YIELD_W)
-			epoll.del_event(self.ev, C.EPOLLOUT)
-		else
-			error("what now?")
-		end
-	end
-	return len
 end
 
 local function tcp_new(fd)
@@ -846,13 +779,7 @@ local function tcp_parse_conf(cfg)
 
 	shdict.init(cfg)
 
-	if cfg.ssl_certificate then
-		ssl.SSL_library_init()
-		sslctx = ssl.SSL_CTX_new(ssl.SSLv23_method())
-		ssl.SSL_CTX_set_cipher_list(sslctx, cfg.ssl_ciphers)
-		ssl.SSL_CTX_use_certificate_file(sslctx, cfg.ssl_certificate, C.SSL_FILETYPE_PEM)
-		ssl.SSL_CTX_use_PrivateKey_file(sslctx, cfg.ssl_certificate_key, C.SSL_FILETYPE_PEM)
-	end
+	ssl.init(cfg)
 
 	local srv_tbl = {}
 	cfg.srv_tbl = srv_tbl
@@ -963,8 +890,8 @@ local function run(cfg, parse_conf, overwrite_handler)
 			local ssock_handler = function(ev)
 				local sock,err = ev.sock:accept()
 				if ev.sock.linfo.ssl then
-					sock.hook.read = ssl_read
-					sock.hook.write = ssl_write
+					sock.hook.read = ssl.read
+					sock.hook.write = ssl.write
 				end
 				if sock then
 					print("child pid=" .. C.getpid() .. " get new connection, cfd=" .. sock.fd .. ", port=" .. sock.port)

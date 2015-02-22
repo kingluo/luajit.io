@@ -15,6 +15,7 @@ require("http") {
 	worker_processes = 1,
 	worker_connections = 2,
 
+	ssl = true,
 	ssl_certificate = "/opt/carbox/sslkey/server.crt",
 	ssl_certificate_key = "/opt/carbox/sslkey/server.key",
 	ssl_ciphers = "RC4:HIGH:!aNULL:!MD5",
