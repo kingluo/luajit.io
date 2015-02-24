@@ -33,11 +33,15 @@ local function sock_io_handler(ev, events)
 		if sock[YIELD_R] then
 			coroutine.resume(sock[YIELD_R])
 		end
-	elseif bit.band(events, C.EPOLLOUT) ~= 0 then
+	end
+
+	if bit.band(events, C.EPOLLOUT) ~= 0 then
 		if sock[YIELD_W] then
 			coroutine.resume(sock[YIELD_W])
 		end
-	elseif bit.band(events, C.EPOLLRDHUP) ~= 0 then
+	end
+
+	if bit.band(events, C.EPOLLRDHUP) ~= 0 then
 		if sock[YIELD_R] then
 			coroutine.resume(sock[YIELD_R])
 			return
@@ -550,6 +554,10 @@ function tcp_mt.__index.accept(self)
 	if cfd <= 0 then return nil, utils.strerror() end
 
 	local sock = tcp_new(cfd)
+	if self.linfo and self.linfo.ssl then
+		sock.hook.read = ssl.read
+		sock.hook.write = ssl.write
+	end
 	if self.family == C.AF_INET then
 		local val = ffi.cast("unsigned short",C.ntohs(addr[0].sin_port))
 		sock.port = tonumber(val)
@@ -889,10 +897,6 @@ local function run(cfg, parse_conf, overwrite_handler)
 
 			local ssock_handler = function(ev)
 				local sock,err = ev.sock:accept()
-				if ev.sock.linfo.ssl then
-					sock.hook.read = ssl.read
-					sock.hook.write = ssl.write
-				end
 				if sock then
 					print("child pid=" .. C.getpid() .. " get new connection, cfd=" .. sock.fd .. ", port=" .. sock.port)
 					connections = connections + 1

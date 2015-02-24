@@ -191,16 +191,11 @@ local function test_post_args()
 	end
 end
 
-local function test_coroutine(rsp)
+local function test_coroutine(req, rsp)
 	local co1 = coroutine.spawn(
 		function()
-			local data,err = parse_form_data(req)
-			for k,v in pairs(data) do
-				coroutine.sleep(1)
-				rsp:say(k,":",v,"\n")
-				rsp:flush()
-			end
 			rsp:say("foo\n")
+			rsp:flush()
 		end
 	)
 
@@ -209,13 +204,12 @@ local function test_coroutine(rsp)
 			rsp:say(dns.resolve("localhost", 80), "\n")
 			rsp:flush()
 			coroutine.sleep(2)
+			coroutine.exit(true)
 			rsp:say("bar\n")
 			rsp:flush()
 		end
 	)
 
-	coroutine.sleep(1)
-	coroutine.kill(co1)
 	print(coroutine.wait(co1))
 	print(coroutine.wait(co2))
 end
@@ -230,6 +224,7 @@ end
 
 return function(req, rsp, cf, extra)
 	-- test_shdict()
-	test_upload(req, rsp)
+	-- test_upload(req, rsp)
+	test_coroutine(req, rsp)
 	return rsp:say("hello world!\n")
 end

@@ -177,12 +177,10 @@ end
 
 function http_rsp_mt.__index.send_headers(self)
 	if not self.headers_sent then
-		local sk = self.sock
 		local status = status_tbl[self.status or 200] or status_tbl[500]
-		local ret,err = sk:send(status)
-		if err then return err end
+		local ret,err = self.sock:send(status)
+		if err then return nil,err end
 
-		-- adjust headers
 		if not self.headers["content-length"] then
 			self.headers["transfer-encoding"] = "chunked"
 		end
@@ -212,16 +210,18 @@ function http_rsp_mt.__index.send_headers(self)
 		end
 		tinsert(tbl, eol)
 
-		local ret,err = sk:send(tbl)
-		if err then return err end
+		local ret,err = self.sock:send(tbl)
+		if err then return nil,err end
 		self.headers_sent = true
 	end
+
+	return 1
 end
 
 local postpone_output = 1460
 
 function http_rsp_mt.__index.say(self, ...)
-	local err = self:send_headers()
+	local ret,err = self:send_headers()
 	if err then return nil,err end
 
 	if not self.is_chunked then
@@ -492,9 +492,11 @@ local function do_servlet(req, rsp)
 			fn = require(fn)
 		end
 		assert(type(fn) == 'function')
-		ret,err = fn(req,rsp,match_srv,servlet)
+		coroutine.spawn(fn, nil, req,rsp,match_srv,servlet)
 		coroutine.wait_descendants()
+		print"entry thread continue..........."
 		if not err then
+			rsp:say("ok\n")
 			rsp:flush()
 			if rsp.headers["transfer-encoding"] == "chunked" then
 				ret,err = rsp.sock:send("0\r\n\r\n")

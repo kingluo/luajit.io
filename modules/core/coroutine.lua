@@ -16,6 +16,24 @@ local co_wait_list2 = setmetatable({},{__mode="k"})
 local co_idle_list = setmetatable({},{__mode="v"})
 local co_info = {}
 
+local function kill_descendants(ancestor)
+	for descendant in pairs(co_info[ancestor].descendants) do
+		local cinfo = co_info[descendant]
+
+		if cinfo.sleep_timer then
+			cinfo.sleep_timer:cancel()
+			cinfo.sleep_timer = nil
+		end
+
+		local gc = cinfo.gc
+		if gc then gc() end
+
+		co_info[ancestor].descendants[descendant] = nil
+		co_info[descendant] = nil
+	end
+	co_info[ancestor].descendants_n = 0
+end
+
 local function handle_dead_co(co, ...)
 	local cinfo = co_info[co]
 
@@ -30,7 +48,7 @@ local function handle_dead_co(co, ...)
 	local parent = cinfo.parent
 	if parent then
 		co_info[parent].exit_childs[co] = {...}
-		if co_wait_list[parent] then
+		if co_wait_list[parent] == false then
 			co_wait_list[parent] = true
 		end
 
@@ -38,9 +56,12 @@ local function handle_dead_co(co, ...)
 		if ancestor then
 			ancestor = co_info[ancestor]
 			if ancestor then
-				ancestor.descendants = ancestor.descendants - 1
+				ancestor.descendants[co] = nil
+				ancestor.descendants_n = ancestor.descendants_n - 1
 			end
 		end
+	else
+		kill_descendants(co)
 	end
 
 	co_info[co] = nil
@@ -57,16 +78,32 @@ local function co_kill(co)
 	return true
 end
 
-local function co_resume_ll(co, propagate_err, ret, err, ...)
-	if ret == false and propagate_err then
-		error(err)
+local function co_exit(exit_group)
+	error(exit_group and "exit_group" or "exit", 0)
+end
+
+local function co_resume_ll(co, ret, ...)
+	if ret == false then
+		local err = select(1, ...)
+		print("co_resume_ll", err)
+		if err == "exit_group" then
+			local cur = coroutine.running()
+			if cur == nil or co_info[cur].parent == nil then
+				local ancestor = cur or co_info[co].ancestor or co
+				kill_descendants(ancestor)
+				if ancestor == co then handle_dead_co(co, ret, ...) end
+				return false, "exited"
+			else
+				error(err, 0)
+			end
+		end
 	end
 
 	if coroutine_status(co) == "dead" then
-		handle_dead_co(co, ret, err, ...)
+		handle_dead_co(co, ret, ...)
 	end
 
-	return ret, err, ...
+	return ret, ...
 end
 
 local function co_resume(co, ...)
@@ -75,12 +112,11 @@ local function co_resume(co, ...)
 		false,"coroutine dead"
 	end
 
-	return co_resume_ll(co, (cinfo.parent == nil),
-		coroutine_resume(co, ...))
+	return co_resume_ll(co, coroutine_resume(co, ...))
 end
 
 local epoll_idle_hook_registered = false
-local function co_yield_idle(flag, ...)
+local function co_idle(flag, ...)
 	local co = coroutine_running()
 	assert(co)
 
@@ -125,10 +161,12 @@ local function co_create(fn, gc)
 
 		local ancestor = co_info[cinfo.ancestor]
 		if ancestor then
-			ancestor.descendants = ancestor.descendants + 1
+			ancestor.descendants[co] = 1
+			ancestor.descendants_n = ancestor.descendants_n + 1
 		end
 	else
-		cinfo.descendants = 0
+		cinfo.descendants = setmetatable({},{__mode="k"})
+		cinfo.descendants_n = 0
 	end
 
 	return co
@@ -136,10 +174,7 @@ end
 
 local function co_spawn(fn, gc, ...)
 	local co = co_create(fn, gc)
-	local cr,err = co_resume(co, ...)
-	if cr == false then
-		error(err .. "\n" .. debug.traceback(co), 0)
-	end
+	co_resume(co, ...)
 	return co
 end
 
@@ -198,7 +233,7 @@ local function wait_descendants()
 	assert(co)
 	local cinfo = co_info[co]
 	assert(cinfo)
-	if cinfo.descendants == nil or cinfo.descendants == 0 then
+	if cinfo.descendants == nil or cinfo.descendants_n == 0 then
 		return
 	end
 
@@ -206,7 +241,7 @@ local function wait_descendants()
 		epoll.add_prepare_hook(function()
 			for co in pairs(co_wait_list2) do
 				local cinfo = co_info[co]
-				if cinfo and cinfo.descendants == 0 then
+				if cinfo and cinfo.descendants_n == 0 then
 					co_resume(co)
 				end
 			end
@@ -224,16 +259,17 @@ local function co_wrap(fn, gc)
 	local co = co_create(fn, gc)
 	return function(...)
 		if not co_info[co] then error("coroutine already killed") end
-		return select(2, co_resume_ll(co, true, coroutine_resume(co, ...)))
+		return select(2, co_resume_ll(co, coroutine_resume(co, ...)))
 	end
 end
 
 coroutine.create = co_create
 coroutine.resume = co_resume
 coroutine.wrap = co_wrap
+coroutine.exit = co_exit
 coroutine.spawn = co_spawn
 coroutine.wait = co_wait
 coroutine.wait_descendants = wait_descendants
 coroutine.kill = co_kill
 coroutine.sleep = co_sleep
-coroutine.yield_idle = co_yield_idle
+coroutine.idle = co_idle
