@@ -35,6 +35,9 @@ function M.header_filter(rsp)
 	end
 
 	rsp.output_buf = {}
+	rsp.output_buf_bytes = 0
+	rsp.output_buf_idx = 1
+
 	local tbl = rsp.output_buf
 	local eol = "\r\n"
 	local sep = ": "
@@ -43,11 +46,14 @@ function M.header_filter(rsp)
 		tinsert(tbl, sep)
 		tinsert(tbl, v)
 		tinsert(tbl, eol)
+		rsp.output_buf_bytes = rsp.output_buf_bytes + #f + #sep + #(tostring(v)) + #eol
 	end
 	tinsert(tbl, eol)
+	rsp.output_buf_bytes = rsp.output_buf_bytes + #eol
+	rsp.output_buf_idx = #tbl + 1
 
-	local ret,err = rsp.sock:send(tbl)
-	if err then return nil,err end
+	-- local ret,err = rsp.sock:send(tbl)
+	-- if err then return nil,err end
 	rsp.headers_sent = true
 
 	return true
@@ -68,12 +74,9 @@ end
 
 function M.body_filter(rsp, ...)
 	assert(rsp.output_buf)
-	if not rsp.output_buf_bytes then rsp.output_buf_bytes = 0 end
-	if not rsp.output_buf_idx then rsp.output_buf_idx = 1 end
 
 	for i=1,select("#", ...) do
 		local buf = select(i, ...)
-
 		if buf.is_file then
 			local ret,err = flush_body(rsp)
 			if err then return ret,err end
@@ -89,7 +92,7 @@ function M.body_filter(rsp, ...)
 			local ret,err = flush_body(rsp)
 			if err then return ret,err end
 		end
-		
+
 		if buf.eof then
 			rsp.eof = true
 			break

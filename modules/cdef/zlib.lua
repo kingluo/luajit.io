@@ -1,5 +1,6 @@
 local ffi = require("ffi")
 
+if ffi.arch == "x86" then
 ffi.cdef[[
 unsigned long compressBound(unsigned long sourceLen);
 int compress2(uint8_t *dest, unsigned long *destLen,
@@ -41,29 +42,22 @@ typedef struct z_stream_s {
     uLong adler;
     uLong reserved;
 } z_stream;
+typedef z_stream *z_streamp;
+extern int deflateInit2_ (z_streamp strm, int level, int method,
+	int windowBits, int memLevel, int strategy, const char *version, int stream_size);
+extern int deflateEnd (z_streamp strm);
+extern int deflate (z_streamp strm, int flush);
+static const int Z_NO_FLUSH      =0;
+static const int Z_PARTIAL_FLUSH =1;
+static const int Z_SYNC_FLUSH    =2;
+static const int Z_FULL_FLUSH    =3;
+static const int Z_FINISH        =4;
+static const int Z_DEFLATED   = 8;
 
+static const int Z_OK = 0;
+static const int Z_STREAM_ERROR = -2;
+static const int Z_STREAM_END = 1;
 ]]
-
-local zlib = ffi.load("z")
-
-local function compress(txt)
-	local n = zlib.compressBound(#txt)
-	local buf = ffi.new("uint8_t[?]", n)
-	local buflen = ffi.new("unsigned long[1]", n)
-	local res = zlib.compress2(buf, buflen, txt, #txt, 9)
-	assert(res == 0)
-	return ffi.string(buf, buflen[0])
+else
+error("arch not support: " .. ffi.arch)
 end
-
-local function uncompress(comp, n)
-	local buf = ffi.new("uint8_t[?]", n)
-	local buflen = ffi.new("unsigned long[1]", n)
-	local res = zlib.uncompress(buf, buflen, comp, #comp)
-	assert(res == 0)
-	return ffi.string(buf, buflen[0])
-end
-
-return {
-	compress = compress,
-	uncompress = uncompress,
-}

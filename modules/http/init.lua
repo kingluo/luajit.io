@@ -190,8 +190,8 @@ function http_rsp_mt.__index.say(self, ...)
 	return run_next_body_filter(self, buf)
 end
 
-function http_rsp_mt.__index.sendfile(self, path, offset, size)
-	local buf = {is_file=true, path=path, offset=offset, size=size}
+function http_rsp_mt.__index.sendfile(self, path, offset, size, eof)
+	local buf = {is_file=true, path=path, offset=offset, size=size, eof=eof}
 	return run_next_body_filter(self, buf)
 end
 
@@ -212,7 +212,7 @@ function http_rsp_mt.__index.exit(self, status)
 end
 
 local function http_rsp_new(req, sock)
-	return setmetatable({headers_sent = false, headers = {}, sock = sock, req = req}, http_rsp_mt)
+	return setmetatable({headers_sent = false, headers = {}, sock = sock, req = req, status=200}, http_rsp_mt)
 end
 
 local g_http_cfg
@@ -331,8 +331,11 @@ local function try_file(req, rsp, cfg)
 	f:close()
 	rsp.headers["content-length"] = flen
 
-	local sent,err = rsp:sendfile(fpath, 0, flen)
-	if err then return rsp:finalize(404) end
+	local sent,err = rsp:sendfile(fpath, 0, flen, true)
+	if err then
+		return rsp:finalize(404)
+	end
+	return sent
 end
 
 local function do_servlet(req, rsp)
@@ -454,7 +457,6 @@ local function do_servlet(req, rsp)
 		assert(type(fn) == 'function')
 		coroutine.spawn(fn, nil, req,rsp,match_srv,servlet)
 		coroutine.wait_descendants()
-		rsp:say("ok\n")
 		return rsp:finalize()
 	end
 
