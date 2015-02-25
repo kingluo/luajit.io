@@ -1,3 +1,4 @@
+local C = require("cdef")
 local ffi = require("ffi")
 local bit = require("bit")
 
@@ -42,10 +43,22 @@ local function bin2hex(s)
 	return s
 end
 
+local v_time_t = ffi.new("time_t[1]")
+local date_buf = ffi.new("char[?]", 200)
+local tm = ffi.new("struct tm[1]")
+local function http_time()
+	assert(C.time(v_time_t) > 0)
+	assert(C.gmtime_r(v_time_t, tm))
+	local len = C.strftime(date_buf, 200, "%a, %d %h %G %H:%M:%S GMT", tm)
+	assert(len > 0)
+	return ffi.string(date_buf, len)
+end
+
 return {
 	import = import,
 	fd_guard = fd_guard,
 	set_nonblock = set_nonblock,
 	strerror = strerror,
 	bin2hex = bin2hex,
+	http_time = http_time,
 }

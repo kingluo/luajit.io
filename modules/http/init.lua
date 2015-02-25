@@ -4,6 +4,10 @@ local tcp = require("socket.tcp")
 local URI = require("uri")
 local uri_decode = require("uri._util").uri_decode
 
+local filter = require("http.filter")
+local run_next_header_filter = filter.run_next_header_filter
+local run_next_body_filter = filter.run_next_body_filter
+
 local strsub = string.sub
 local strfind = string.find
 local strmatch = string.match
@@ -152,132 +156,59 @@ function http_req_mt.__index.get_post_args(self)
 	return self.post_args
 end
 
-local status_tbl = {
-	[200] = "HTTP/1.1 200 OK\r\n";
-	[400] = "HTTP/1.1 400 Bad Request\r\n";
-	[403] = "HTTP/1.1 403 Forbidden\r\n";
-	[404] = "HTTP/1.1 404 Not Found\r\n";
-	[500] = "HTTP/1.1 500 Internal Server Error\r\n";
-	[501] = "HTTP/1.1 501 Not Implemented\r\n";
-	[503] = "HTTP/1.1 503 Service Unavailable\r\n";
-}
-
-local http_rsp_mt = {__index={}}
-
-local v_time_t = ffi.new("time_t[1]")
-local date_buf = ffi.new("char[?]", 200)
-local tm = ffi.new("struct tm[1]")
-local function http_time()
-	assert(C.time(v_time_t) > 0)
-	assert(C.gmtime_r(v_time_t, tm))
-	local len = C.strftime(date_buf, 200, "%a, %d %h %G %H:%M:%S GMT", tm)
-	assert(len > 0)
-	return ffi.string(date_buf, len)
-end
-
-function http_rsp_mt.__index.send_headers(self)
-	if not self.headers_sent then
-		local status = status_tbl[self.status or 200] or status_tbl[500]
-		local ret,err = self.sock:send(status)
-		if err then return nil,err end
-
-		if not self.headers["content-length"] then
-			self.headers["transfer-encoding"] = "chunked"
-		end
-		if not self.headers["content-type"] then
-			self.headers["content-type"] = "text/plain; charset=utf-8"
-		end
-
-		self.headers["server"] = "luajit.io"
-
-		self.headers["date"] = http_time()
-		self.headers["cache-control"] = "no-cache, private"
-		self.headers["connection"] = "Keep-Alive"
-
-		if self.req.headers["connection"] == "close" then
-			self.headers["connection"] = "close"
-		end
-
-		if not self.output_buf then self.output_buf = {} end
-		local tbl = self.output_buf
-		local eol = "\r\n"
-		local sep = ": "
-		for f, v in pairs(self.headers) do
-			tinsert(tbl, f)
-			tinsert(tbl, sep)
-			tinsert(tbl, v)
-			tinsert(tbl, eol)
-		end
-		tinsert(tbl, eol)
-
-		local ret,err = self.sock:send(tbl)
-		if err then return nil,err end
-		self.headers_sent = true
-	end
-
-	return 1
-end
-
-local postpone_output = 1460
-
-function http_rsp_mt.__index.say(self, ...)
-	local ret,err = self:send_headers()
-	if err then return nil,err end
-
-	if not self.is_chunked then
-		self.is_chunked = self.headers["transfer-encoding"] == "chunked"
-	end
-	local tbl = self.output_buf
-	if not self.output_buf_bytes then self.output_buf_bytes = 0 end
-	if not self.output_buf_idx then self.output_buf_idx = 1 end
-	local eol = "\r\n"
-	for i=1,select("#",...) do
-		local str = select(i,...)
-		local len = #str
-		self.output_buf_bytes = self.output_buf_bytes + len
-		if self.is_chunked then
-			local size = strformat("%X\r\n", len)
-			tbl[self.output_buf_idx] = size
-			self.output_buf_idx = self.output_buf_idx + 1
-			self.output_buf_bytes = self.output_buf_bytes + #size
-			tbl[self.output_buf_idx] = str
-			self.output_buf_idx = self.output_buf_idx + 1
-			tbl[self.output_buf_idx] = eol
-			self.output_buf_idx = self.output_buf_idx + 1
-			self.output_buf_bytes = self.output_buf_bytes + 1
-		else
-			tbl[self.output_buf_idx] = str
-			self.output_buf_idx = self.output_buf_idx + 1
-		end
-	end
-
-	if self.output_buf_bytes >= postpone_output then
-		tbl[self.output_buf_idx] = nil
-		self.output_buf_idx = 1
-		self.output_buf_bytes = 0
-		local ret,err = self.sock:send(tbl)
-		if err then return nil,err end
-	end
-
-	return 1
-end
-
-function http_rsp_mt.__index.flush(self)
-	if self.output_buf_bytes and self.output_buf_bytes > 0 then
-		local tbl = self.output_buf
-		tbl[self.output_buf_idx] = nil
-		self.output_buf_idx = 1
-		self.output_buf_bytes = 0
-		local ret,err = self.sock:send(tbl)
-		if err then return err end
-	end
-	return 1
-end
-
 local function http_req_new(method, url, headers, sock)
 	return setmetatable({body_read = false,
 		method = method, url = url,
 		headers = headers, sock = sock}, http_req_mt)
+end
+
+local http_rsp_mt = {__index={}}
+
+function http_rsp_mt.__index.send_headers(self)
+	return run_next_header_filter(self)
+end
+
+local function calc_buf_size(buf)
+	local size = 0
+	for _,v in ipairs(buf) do
+		local typ = type(v)
+		if typ == "table" then
+			size = size + calc_buf_size(v)
+		else
+			if typ ~= "string" then
+				 v = tostring(v)
+			end
+			size = size + #v
+		end
+	end
+	return size
+end
+
+function http_rsp_mt.__index.say(self, ...)
+	local buf = {size=0, ...}
+	buf.size = calc_buf_size(buf)
+	return run_next_body_filter(self, buf)
+end
+
+function http_rsp_mt.__index.sendfile(self, path, offset, size)
+	local buf = {is_file=true, path=path, offset=offset, size=size}
+	return run_next_body_filter(self, buf)
+end
+
+local flush_buf = {size=0, flush=true}
+function http_rsp_mt.__index.flush(self, status)
+	return run_next_body_filter(self, flush_buf)
+end
+
+local finalize_buf = {size=0, eof=true}
+function http_rsp_mt.__index.finalize(self, status)
+	if not self.status then self.status = status end
+	return run_next_body_filter(self, finalize_buf)
+end
+
+function http_rsp_mt.__index.exit(self, status)
+	if not self.status then self.status = status end
+	return coroutine.exit()
 end
 
 local function http_rsp_new(req, sock)
@@ -373,6 +304,35 @@ local function http_parse_conf(cfg)
 			tsort(srv_list.postfix_size_hash, more_than)
 		end
 	end
+end
+
+local mime_types = {
+	["txt"] = "text/plain",
+	["html"] = "text/html",
+	["htm"] = "text/html",
+	["shtml"] = "text/html",
+	["css"] = "text/css",
+	["xml"] = "text/xml",
+	["rss"] = "text/xml",
+	["gif"] = "image/gif",
+	["jpeg"] = "image/jpeg",
+	["jpg"] = "image/jpeg",
+	["js"] = "application/x-javascript",
+}
+
+local function try_file(req, rsp, cfg)
+	local path = req.url:path()
+	local ext = string.match(path, "%.([^%.]+)$")
+	rsp.headers["content-type"] = mime_types[ext] or "application/octet-stream"
+	local fpath = (cfg.root or ".") .. '/' .. path
+	local f = io.open(fpath)
+	assert(f)
+	local flen = f:seek('end')
+	f:close()
+	rsp.headers["content-length"] = flen
+
+	local sent,err = rsp:sendfile(fpath, 0, flen)
+	if err then return rsp:finalize(404) end
 end
 
 local function do_servlet(req, rsp)
@@ -494,24 +454,11 @@ local function do_servlet(req, rsp)
 		assert(type(fn) == 'function')
 		coroutine.spawn(fn, nil, req,rsp,match_srv,servlet)
 		coroutine.wait_descendants()
-		print"entry thread continue..........."
-		if not err then
-			rsp:say("ok\n")
-			rsp:flush()
-			if rsp.headers["transfer-encoding"] == "chunked" then
-				ret,err = rsp.sock:send("0\r\n\r\n")
-			end
-		end
-		if err then
-			print(err)
-			-- TODO 500 page
-			return false
-		end
-	else
-		print "no servlet"
-		-- TODO 404 page
-		return false
+		rsp:say("ok\n")
+		return rsp:finalize()
 	end
+
+	return try_file(req, rsp, match_srv)
 end
 
 local function http_handler(sock)
@@ -529,11 +476,8 @@ local function http_handler(sock)
 		local req = http_req_new(method, uri, headers, sock)
 		local rsp = http_rsp_new(req, sock)
 		sock.read_quota = sock.stats.consume + (headers["content-length"] or 0)
-		local ret = do_servlet(req, rsp)
+		do_servlet(req, rsp)
 		sock.read_quota = nil
-		-- TODO
-		-- 1. discard request body if needed
-		-- 2. response error pages according to ret
 		if headers["connection"] == "close" then
 			break
 		end

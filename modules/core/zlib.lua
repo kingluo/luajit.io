@@ -1,11 +1,49 @@
 local ffi = require("ffi")
+
 ffi.cdef[[
 unsigned long compressBound(unsigned long sourceLen);
 int compress2(uint8_t *dest, unsigned long *destLen,
 	      const uint8_t *source, unsigned long sourceLen, int level);
 int uncompress(uint8_t *dest, unsigned long *destLen,
 	       const uint8_t *source, unsigned long sourceLen);
+
+typedef unsigned char Byte;
+typedef unsigned int uInt;
+typedef unsigned long uLong;
+typedef Byte Bytef;
+typedef char charf;
+typedef int intf;
+typedef uInt uIntf;
+typedef uLong uLongf;
+typedef void const *voidpc;
+typedef void *voidpf;
+typedef void *voidp;
+typedef voidpf (*alloc_func) (voidpf opaque, uInt items, uInt size);
+typedef void (*free_func) (voidpf opaque, voidpf address);
+
+typedef struct z_stream_s {
+    Bytef *next_in;
+    uInt avail_in;
+    uLong total_in;
+
+    Bytef *next_out;
+    uInt avail_out;
+    uLong total_out;
+
+    char *msg;
+    void *state;
+
+    alloc_func zalloc;
+    free_func zfree;
+    voidpf opaque;
+
+    int data_type;
+    uLong adler;
+    uLong reserved;
+} z_stream;
+
 ]]
+
 local zlib = ffi.load("z")
 
 local function compress(txt)
@@ -24,14 +62,6 @@ local function uncompress(comp, n)
 	assert(res == 0)
 	return ffi.string(buf, buflen[0])
 end
-
--- Simple test code.
--- local txt = string.rep("abcd", 1000)
--- print("Uncompressed size: ", #txt)
--- local c = compress(txt)
--- print("Compressed size: ", #c)
--- local txt2 = uncompress(c, #txt)
--- assert(txt2 == txt)
 
 return {
 	compress = compress,

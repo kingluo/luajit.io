@@ -127,6 +127,9 @@ struct flock
   };
 int fcntl(int fd, int cmd, ... /* arg */ );
 
+typedef long int off_t;
+off_t lseek(int fd, off_t offset, int whence);
+
 static const int F_SETLKW = 7;
 static const short int F_RDLCK         =0;
 static const short int F_WRLCK         =1;

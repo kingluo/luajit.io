@@ -486,6 +486,64 @@ function tcp_mt.__index.send(self, ...)
 	return sent,err
 end
 
+function tcp_mt.__index.sendfile(self, path, offset, size)
+	local sent = 0
+	local err
+
+	if self.use_ssl then
+		local f = io.open(path)
+		if offset > 0 then f:seek(offset) end
+		while true do
+			local s = f:read(16*1024)
+			if s ~= nil then
+				local sent2
+				sent2,err = self:send(s)
+				sent = sent + sent2
+				if err then break end
+			else
+				f:close()
+				break
+			end
+		end
+	else
+		local fd = C.open(path, 0)
+		assert(fd > 0)
+		if offset > 0 then
+			assert(C.lseek(fd, offset, C.SEEK_SET) == offset)
+		end
+
+		while true do
+			local len = C.sendfile(self.fd, fd, nil, size)
+			local errno = ffi.errno()
+
+			if len > 0 then
+				size = size - len
+				sent = sent + len
+			end
+
+			if size == 0 then
+				break
+			end
+
+			if len == 0 then
+				err = "sendfile: socket broekn"
+				break
+			elseif errno == C.EAGAIN then
+				epoll.add_event(self.ev, C.EPOLLOUT)
+				self:yield(YIELD_W)
+				epoll.del_event(self.ev, C.EPOLLOUT)
+			elseif errno ~= C.EINTR then
+				err = ffi.string(C.strerror(errno))
+				break
+			end
+		end
+
+		assert(C.close(fd) == 0)
+	end
+
+	return sent, err
+end
+
 local function create_tcp_socket(self, family)
 	assert(self.fd == -1)
 	local fd = C.socket(self.family, C.SOCKET_STREAM, 0)
@@ -557,6 +615,7 @@ function tcp_mt.__index.accept(self)
 	if self.linfo and self.linfo.ssl then
 		sock.hook.read = ssl.read
 		sock.hook.write = ssl.write
+		sock.use_ssl = true
 	end
 	if self.family == C.AF_INET then
 		local val = ffi.cast("unsigned short",C.ntohs(addr[0].sin_port))

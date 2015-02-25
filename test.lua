@@ -225,6 +225,6 @@ end
 return function(req, rsp, cf, extra)
 	-- test_shdict()
 	-- test_upload(req, rsp)
-	test_coroutine(req, rsp)
+	-- test_coroutine(req, rsp)
 	return rsp:say("hello world!\n")
 end

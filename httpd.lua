@@ -46,11 +46,10 @@ require("http") {
 			{"=", "/test2", "test"},
 			{"^", "/foobar", "foobar_mod"},
 			{"$", "luax", "http.luax", alias="WEB-INF/luax/"},
-			{"^~", "/static/", "http.static"},
 			{
 				"f",
 				function(req)
-					return req.headers["user-agent"]:find("curl")
+					return string.find(req.url:path(), "^/test")
 				end,
 				"test"
 			},

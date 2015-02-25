@@ -158,12 +158,9 @@ local function co_create(fn, gc)
 
 	if parent then
 		cinfo.ancestor = co_info[parent].ancestor or parent
-
 		local ancestor = co_info[cinfo.ancestor]
-		if ancestor then
-			ancestor.descendants[co] = 1
-			ancestor.descendants_n = ancestor.descendants_n + 1
-		end
+		ancestor.descendants[co] = 1
+		ancestor.descendants_n = ancestor.descendants_n + 1
 	else
 		cinfo.descendants = setmetatable({},{__mode="k"})
 		cinfo.descendants_n = 0
