@@ -111,11 +111,7 @@ function M.body_filter(rsp, ...)
 			assert(buf.size < CHUNK)
 			assert(copy_buf(buf) == buf.size)
 			local ret,str = compress_chunk(gzip.strm, buf.size, flush)
-			if #str > 0 then
-				buf.size = #str
-				buf[1] = str
-			end
-			local ret,err = M.next_body_filter(rsp, buf)
+			local ret,err = M.next_body_filter(rsp, {size=#str, str, eof = buf.eof, flush=buf.flush})
 			if err then return ret,err end
 		end
 	end

@@ -229,7 +229,23 @@ local function test_upload(req, rsp)
 	end
 end
 
-return function(req, rsp, cf, extra)
+local function test_lock(req, rsp)
+	local lock = require "resty.lock"
+	for i = 1, 2 do
+		local lock = lock:new("my_locks")
+
+		local elapsed, err = lock:lock("my_key")
+		rsp:say("lock: ", elapsed, ", ", err)
+
+		local ok, err = lock:unlock()
+		if not ok then
+			rsp:say("failed to unlock: ", err)
+		end
+		rsp:say("unlock: ", ok)
+	end
+end
+
+return function(req, rsp)
 	-- test_shdict()
 	-- test_upload(req, rsp)
 	-- test_coroutine(req, rsp)
@@ -237,6 +253,8 @@ return function(req, rsp, cf, extra)
 	-- rsp:exec("/test2", {a=1,b={"foo bar","barfoo"}})
 	-- rsp:redirect("/test2?a=1&b=foo&b=bar")
 	-- rsp:exec("/static/test.txt")
+
+	test_lock(req, rsp)
 
 	return rsp:say("hello world! test handler\n")
 end

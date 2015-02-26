@@ -1,7 +1,24 @@
 local C = require("cdef")
 local ffi = require("ffi")
+local bit = require("bit")
+
+local bor = bit.bor
+
 local tconcat = table.concat
 local tinsert = table.insert
+
+local O_RDONLY = tonumber("00000000", 8)
+local O_WRONLY = tonumber("00000001", 8)
+local O_RDWR = tonumber("00000002", 8)
+local O_CREAT = tonumber("00000100", 8)
+local O_EXCL = tonumber("00000200", 8)
+
+local S_IRUSR = tonumber("00400", 8)
+local S_IWUSR = tonumber("00200", 8)
+
+local w_not_exist = bor(O_WRONLY, O_CREAT, O_EXCL)
+local w_anyway = bor(O_WRONLY, O_CREAT)
+local owner_rw = ffi.new("mode_t", bor(S_IRUSR, S_IWUSR))
 
 local pathx = {"/tmp/.shdict",1,1,1}
 local kpathx = {1,1}
@@ -58,12 +75,7 @@ local function lock_w(fd)
 	assert(C.fcntl(fd, C.F_SETLKW, flock) == 0)
 end
 
-local mode = ffi.new("mode_t", 384)
-function _M.set(self, key, value)
-	kpathx[1] = self.path
-	kpathx[2] = key
-	local path = tconcat(kpathx, "/")
-	local fd = C.open(path, 65, mode)
+local function write_value(fd, value)
 	assert(fd > 0)
 	lock_w(fd)
 	local typ = type(value)
@@ -78,7 +90,37 @@ function _M.set(self, key, value)
 	end
 	assert(C.write(fd, typ, 1) == 1)
 	assert(C.write(fd, value, #value) == #value)
+end
+
+function _M.set(self, key, value)
+	kpathx[1] = self.path
+	kpathx[2] = key
+	local path = tconcat(kpathx, "/")
+	local fd = C.open(path, w_anyway, owner_rw)
+	write_value(fd, value)
 	assert(C.close(fd) == 0)
+	return true
+end
+
+function _M.add(self, key, value)
+	kpathx[1] = self.path
+	kpathx[2] = key
+	local path = tconcat(kpathx, "/")
+	local fd = C.open(path, w_not_exist, owner_rw)
+	if fd == -1 then
+		return false, "exist"
+	end
+	write_value(fd, value)
+	assert(C.close(fd) == 0)
+	return true
+end
+
+function _M.delete(self, key)
+	kpathx[1] = self.path
+	kpathx[2] = key
+	local path = tconcat(kpathx, "/")
+	C.unlink(path)
+	return true
 end
 
 local RBUF_SIZE = 4096

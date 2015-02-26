@@ -22,6 +22,7 @@ require("http") {
 
 	lua_shared_dict = {
 		test = "10M",
+		my_locks = "100K"
 	},
 
 	gzip = true,

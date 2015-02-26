@@ -173,13 +173,14 @@ end
 
 local function calc_buf_size(buf)
 	local size = 0
-	for _,v in ipairs(buf) do
+	for i,v in ipairs(buf) do
 		local typ = type(v)
 		if typ == "table" then
 			size = size + calc_buf_size(v)
 		else
 			if typ ~= "string" then
-				 v = tostring(v)
+				buf[i] = tostring(v)
+				v = buf[i]
 			end
 			size = size + #v
 		end
@@ -189,6 +190,18 @@ end
 
 function http_rsp_mt.__index.say(self, ...)
 	local buf = {size=0, ...}
+
+	-- supply nil arguments
+	local n_arg = select("#", ...)
+	if #buf ~= n_arg then
+		for i=1,n_arg do
+			local arg = select(i, ...)
+			if type(arg) == "nil" then
+				tinsert(buf, i, "nil")
+			end
+		end
+	end
+
 	buf.size = calc_buf_size(buf)
 	return run_next_body_filter(self, buf)
 end
