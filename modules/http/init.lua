@@ -538,12 +538,16 @@ local function do_location(req, rsp)
 
 	if location then
 		local fn = location[3]
-		local ret, err
 		if type(fn) == 'string' then
 			fn = require(fn)
 		end
-		assert(type(fn) == 'function')
-		coroutine.spawn(fn, nil, req, rsp)
+
+		local handler = coroutine.spawn(fn, nil, req, rsp)
+		local ret, err = coroutine.wait(handler)
+		if ret == false and err ~= "exited" then
+			return rsp:finalize(500)
+		end
+
 		coroutine.wait_descendants()
 		if rsp.exec == true then
 			rsp.exec = false
