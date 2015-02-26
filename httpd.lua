@@ -39,7 +39,7 @@ require("http") {
 		server_name = {"example.org", "*.example.com", "~my%d+web%.org"},
 		root = "/srv/myserver",
 		default_type = 'text/plain',
-		servlet = {
+		location = {
 			-- Refer to nginx location directive:
 			-- http://nginx.org/en/docs/http/ngx_http_core_module.html#location
 			-- Besides nginx modifiers, three new modifiers added:
@@ -69,7 +69,7 @@ require("http") {
 		server_name = {"example.net"},
 		root = "/srv/foorbar",
 		default_type = 'text/plain',
-		servlet = {
+		location = {
 			{"^~", "/static/", "static_mod"}
 		}
 	},

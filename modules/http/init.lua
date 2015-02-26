@@ -195,15 +195,13 @@ function http_rsp_mt.__index.sendfile(self, path, offset, size, eof)
 	return run_next_body_filter(self, buf)
 end
 
-local flush_buf = {size=0, flush=true}
 function http_rsp_mt.__index.flush(self, status)
-	return run_next_body_filter(self, flush_buf)
+	return run_next_body_filter(self, {size=0, flush=true})
 end
 
-local finalize_buf = {size=0, eof=true}
 function http_rsp_mt.__index.finalize(self, status)
 	if not self.status then self.status = status end
-	return run_next_body_filter(self, finalize_buf)
+	return run_next_body_filter(self, {size=0, eof=true})
 end
 
 function http_rsp_mt.__index.exit(self, status)
@@ -227,25 +225,25 @@ local function http_parse_conf(cfg)
 	local global_mt = {__index=cfg}
 	for _,srv in ipairs(cfg) do
 		setmetatable(srv, global_mt)
-		srv.servlet_hash = {
+		srv.location_hash = {
 			exact_hash={},
 			prefix_hash={},
 			postfix_hash={}, postfix_hash_len=0,
 			pattern={}
 		}
-		local shash = srv.servlet_hash
+		local shash = srv.location_hash
 		local server_mt = {__index=srv}
-		for _,servlet in ipairs(srv.servlet) do
-			setmetatable(servlet, server_mt)
-			if servlet[1] == "=" then
-				shash.exact_hash[servlet[2]] = servlet
-			elseif servlet[1] == "^" or servlet[1] == "^~" then
-				shash.prefix_hash[servlet[2]] = servlet
-			elseif servlet[1] == "$" then
-				shash.postfix_hash[servlet[2]] = servlet
+		for _,location in ipairs(srv.location) do
+			setmetatable(location, server_mt)
+			if location[1] == "=" then
+				shash.exact_hash[location[2]] = location
+			elseif location[1] == "^" or location[1] == "^~" then
+				shash.prefix_hash[location[2]] = location
+			elseif location[1] == "$" then
+				shash.postfix_hash[location[2]] = location
 				shash.postfix_hash_len = shash.postfix_hash_len + 1
 			else
-				tinsert(shash.pattern, servlet)
+				tinsert(shash.pattern, location)
 			end
 		end
 
@@ -342,7 +340,7 @@ local function try_file(req, rsp, cfg)
 	return sent
 end
 
-local function do_servlet(req, rsp)
+local function do_location(req, rsp)
 	local match_srv
 	local srv_list = g_http_cfg.srv_tbl[req.sock.srv_port][req.sock.srv_ip]
 		or g_http_cfg.srv_tbl[req.sock.srv_port]["*"]
@@ -393,16 +391,16 @@ local function do_servlet(req, rsp)
 		match_srv = srv_list[1]
 	end
 
-	local servlet
+	local location
 	if match_srv then
-		local shash = match_srv.servlet_hash
+		local shash = match_srv.location_hash
 		local path = req.url:path()
 		local pathlen = #path
 		local match_done = false
 
 		-- exact match
-		servlet = shash.exact_hash[path]
-		if servlet then match_done = true end
+		location = shash.exact_hash[path]
+		if location then match_done = true end
 
 		-- postfix match
 		if not match_done then
@@ -410,8 +408,8 @@ local function do_servlet(req, rsp)
 				local p = C.strrchr(path, 46)
 				if p ~= nil then
 					local postfix = ffi.string(p + 1)
-					servlet = shash.postfix_hash[postfix]
-					if servlet then match_done = true end
+					location = shash.postfix_hash[postfix]
+					if location then match_done = true end
 				end
 			end
 		end
@@ -421,7 +419,7 @@ local function do_servlet(req, rsp)
 			for _,v in ipairs(shash.prefix_size_hash) do
 				local slcf = shash.prefix_hash[strsub(path, 1, v)]
 				if slcf then
-					servlet = slcf
+					location = slcf
 					match_done = (slcf[1] == "^~")
 					break
 				end
@@ -434,17 +432,17 @@ local function do_servlet(req, rsp)
 				local modifier,pat = slcf[1],slcf[2]
 				if modifier == "~" then
 					if strfind(path, pat) then
-						servlet = slcf
+						location = slcf
 						break
 					end
 				elseif modifier == "~*" then
 					if strfind(string.lower(path), string.lower(pat)) then
-						servlet = slcf
+						location = slcf
 						break
 					end
 				elseif modifier == "f"  then
 					if pat(req) then
-						servlet = slcf
+						location = slcf
 						break
 					end
 				end
@@ -453,10 +451,10 @@ local function do_servlet(req, rsp)
 	end
 
 	req.srvcf = match_srv
-	req.lcf = servlet
+	req.lcf = location
 
-	if servlet then
-		local fn = servlet[3]
+	if location then
+		local fn = location[3]
 		local ret, err
 		if type(fn) == 'string' then
 			fn = require(fn)
@@ -485,7 +483,7 @@ local function http_handler(sock)
 		local req = http_req_new(method, uri, headers, sock)
 		local rsp = http_rsp_new(req, sock)
 		sock.read_quota = sock.stats.consume + (headers["content-length"] or 0)
-		do_servlet(req, rsp)
+		do_location(req, rsp)
 		sock.read_quota = nil
 		if headers["connection"] == "close" then
 			break

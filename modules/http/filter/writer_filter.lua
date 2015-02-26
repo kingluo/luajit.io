@@ -16,12 +16,14 @@ local status_tbl = {
 local postpone_output = 1460
 
 function M.header_filter(rsp)
+	local lcf = rsp.req.lcf or rsp.req.srvcf
+
 	local status = status_tbl[rsp.status or 200] or status_tbl[500]
 	local ret,err = rsp.sock:send(status)
 	if err then return nil,err end
 
 	if not rsp.headers["content-type"] then
-		rsp.headers["content-type"] = "text/plain; charset=utf-8"
+		rsp.headers["content-type"] = lcf.default_type
 	end
 
 	rsp.headers["server"] = "luajit.io"
