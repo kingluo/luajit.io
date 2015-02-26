@@ -58,11 +58,11 @@ local function luax_compile(str,env)
 	return fn()
 end
 
-local function service(req, rsp, srvcfg, lcf)
+local function service(req, rsp)
 	local path = req.url:path()
 	if not luax_cache[path] then
-		local fpath = {(srvcfg.root or "."), "", path}
-		if lcf.alias then fpath[2] = lcf.alias end
+		local fpath = {(req.lcf.root or "."), "", path}
+		if req.lcf.alias then fpath[2] = req.lcf.alias end
 		fpath = table.concat(fpath, "/")
 		local f = io.open(fpath)
 		assert(f)

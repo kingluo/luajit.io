@@ -224,7 +224,9 @@ local function http_parse_conf(cfg)
 		return a > b
 	end
 
+	local global_mt = {__index=cfg}
 	for _,srv in ipairs(cfg) do
+		setmetatable(srv, global_mt)
 		srv.servlet_hash = {
 			exact_hash={},
 			prefix_hash={},
@@ -232,7 +234,9 @@ local function http_parse_conf(cfg)
 			pattern={}
 		}
 		local shash = srv.servlet_hash
+		local server_mt = {__index=srv}
 		for _,servlet in ipairs(srv.servlet) do
+			setmetatable(servlet, server_mt)
 			if servlet[1] == "=" then
 				shash.exact_hash[servlet[2]] = servlet
 			elseif servlet[1] == "^" or servlet[1] == "^~" then
@@ -448,6 +452,9 @@ local function do_servlet(req, rsp)
 		end
 	end
 
+	req.srvcf = match_srv
+	req.lcf = servlet
+
 	if servlet then
 		local fn = servlet[3]
 		local ret, err
@@ -455,7 +462,7 @@ local function do_servlet(req, rsp)
 			fn = require(fn)
 		end
 		assert(type(fn) == 'function')
-		coroutine.spawn(fn, nil, req,rsp,match_srv,servlet)
+		coroutine.spawn(fn, nil, req, rsp)
 		coroutine.wait_descendants()
 		return rsp:finalize()
 	end

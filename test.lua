@@ -226,5 +226,5 @@ return function(req, rsp, cf, extra)
 	-- test_shdict()
 	-- test_upload(req, rsp)
 	-- test_coroutine(req, rsp)
-	return rsp:say("hello world!\n")
+	return rsp:say("hello world! test handler\n")
 end

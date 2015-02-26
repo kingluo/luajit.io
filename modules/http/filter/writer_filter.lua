@@ -46,14 +46,11 @@ function M.header_filter(rsp)
 		tinsert(tbl, sep)
 		tinsert(tbl, v)
 		tinsert(tbl, eol)
-		rsp.output_buf_bytes = rsp.output_buf_bytes + #f + #sep + #(tostring(v)) + #eol
 	end
 	tinsert(tbl, eol)
-	rsp.output_buf_bytes = rsp.output_buf_bytes + #eol
-	rsp.output_buf_idx = #tbl + 1
 
-	-- local ret,err = rsp.sock:send(tbl)
-	-- if err then return nil,err end
+	local ret,err = rsp.sock:send(tbl)
+	if err then return nil,err end
 	rsp.headers_sent = true
 
 	return true

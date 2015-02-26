@@ -31,10 +31,13 @@ function M.body_filter(rsp, ...)
 			end
 			local ret,err = M.next_body_filter(rsp, {size=#size, size}, buf)
 			if err then return ret,err end
-		elseif buf.eof then
-			buf.size = buf.size + #eof
-			tinsert(buf, eof)
-			return M.next_body_filter(rsp, buf)
+		else
+			if buf.eof then
+				buf.size = buf.size + #eof
+				tinsert(buf, eof)
+			end
+			local ret,err = M.next_body_filter(rsp, buf)
+			if err then return ret,err end
 		end
 	end
 

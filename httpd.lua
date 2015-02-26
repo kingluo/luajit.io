@@ -24,11 +24,16 @@ require("http") {
 		test = "10M",
 	},
 
+	gzip = true,
+	gzip_comp_level = 1,
+	gzip_min_length = 20,
+	gzip_types = {["text/plain"]=true},
+
 	-- Server blocks
 	-- Refer to http://nginx.org/en/docs/http/request_processing.html
 	{
 		listen = {
-			{port=8080,default_server=true,ssl=false},
+			{port=8080,default_server=true,ssl=true},
 			{address="unix:/var/run/test.sock"}
 		},
 		server_name = {"example.org", "*.example.com", "~my%d+web%.org"},
@@ -37,7 +42,7 @@ require("http") {
 		servlet = {
 			-- Refer to nginx location directive:
 			-- http://nginx.org/en/docs/http/ngx_http_core_module.html#location
-			-- Add three new modifiers:
+			-- Besides nginx modifiers, three new modifiers added:
 			-- "^" explicitly longest prefix matching
 			-- "$" postfix matching, just after exact matching, return if matched
 			-- "f" matching function for arbitrary matching, with same priority as regexp matching
@@ -51,7 +56,8 @@ require("http") {
 				function(req)
 					return string.find(req.url:path(), "^/test")
 				end,
-				"test"
+				"test",
+				gzip_types = {["text/plain"]=true}
 			},
 		}
 	},

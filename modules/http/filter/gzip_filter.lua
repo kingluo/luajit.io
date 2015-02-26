@@ -13,8 +13,12 @@ local buf_in = ffi.new("char[?]", CHUNK)
 local buf_out = ffi.new("char[?]", CHUNK)
 
 function M.header_filter(rsp)
-	local len = rsp.headers["content-length"] or 0
-	if rsp.status == 200 and len > 10 then
+	local lcf = rsp.req.lcf or rsp.req.srvcf
+	local len = rsp.headers["content-length"]
+	local typ = rsp.headers["content-type"]
+	if lcf.gzip and rsp.status == 200
+		and (lcf.gzip_min_length == nil or (len == nil or len >= lcf.gzip_min_length))
+		and (lcf.gzip_types == nil or (typ == nil or lcf.gzip_types[typ])) then
 		rsp.headers["content-encoding"] = "gzip"
 		rsp.headers["content-length"] = nil
 		rsp.gzip = {}
@@ -22,16 +26,14 @@ function M.header_filter(rsp)
 	return M.next_header_filter(rsp)
 end
 
-local function copy_buf(buf)
-	local size = 0
+local function copy_buf(buf, size)
+	size = size or 0
 	for _,v in ipairs(buf) do
 		local typ = type(v)
 		if typ == "table" then
-			size = size + calc_buf_size(v)
+			size = copy_buf(buf, size)
 		else
-			if typ ~= "string" then
-				 v = tostring(v)
-			end
+			ffi.copy(buf_in + size, v, #v)
 			size = size + #v
 		end
 	end
@@ -63,11 +65,14 @@ function M.body_filter(rsp, ...)
 	local gzip = rsp.gzip
 	if not gzip.strm then
 		gzip.strm = ffi.new("z_stream")
-		assert(zlib.deflateInit2_(gzip.strm, 1, C.Z_DEFLATED, 31, 8, 0, ZLIB_VERSION, ffi.sizeof(gzip.strm)) == C.Z_OK)
+		assert(zlib.deflateInit2_(gzip.strm, rsp.req.lcf.gzip_comp_level or 1,
+			C.Z_DEFLATED, 31, 8, 0,
+			ZLIB_VERSION, ffi.sizeof(gzip.strm)) == C.Z_OK)
 	end
 
 	for i=1,select("#", ...) do
 		local buf = select(i, ...)
+
 		local flush = C.Z_NO_FLUSH
 		if buf.eof then
 			flush = C.Z_FINISH
@@ -76,6 +81,7 @@ function M.body_filter(rsp, ...)
 		end
 
 		if buf.is_file then
+			assert(buf.size > 0)
 			local fd = C.open(buf.path, 0)
 			assert(fd > 0)
 			if buf.offset > 0 then
@@ -88,6 +94,7 @@ function M.body_filter(rsp, ...)
 				size = size - sz
 				local ret,str = compress_chunk(gzip.strm, sz, flush)
 				if ret == C.Z_STREAM_END then
+					assert(buf.eof)
 					zlib.deflateEnd(gzip.strm)
 				end
 				local flush, eof
@@ -101,6 +108,13 @@ function M.body_filter(rsp, ...)
 			end
 			assert(C.close(fd) == 0)
 		else
+			assert(buf.size < CHUNK)
+			assert(copy_buf(buf) == buf.size)
+			local ret,str = compress_chunk(gzip.strm, buf.size, flush)
+			if #str > 0 then
+				buf.size = #str
+				buf[1] = str
+			end
 			local ret,err = M.next_body_filter(rsp, buf)
 			if err then return ret,err end
 		end
