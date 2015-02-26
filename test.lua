@@ -150,15 +150,6 @@ local function test_redis()
 	-- end
 end
 
-local function test_shdict()
-	local test = require("core.shdict").shared.test
-	test:set("foo","bar")
-	print(test:get("foo"))
-	test:set("foo",98767)
-	print(test:get("foo"))
-	print(test:get_keys())
-end
-
 local function test_db(rsp)
 	local db,err = getdb()
 	if err then print(err); os.exit(1); end
@@ -230,24 +221,9 @@ local function test_upload(req, rsp)
 	end
 end
 
-local function test_lock(req, rsp)
-	local lock = require "resty.lock"
-	for i = 1, 2 do
-		local lock = lock:new("my_locks")
 
-		local elapsed, err = lock:lock("my_key")
-		rsp:say("lock: ", elapsed, ", ", err)
-
-		local ok, err = lock:unlock()
-		if not ok then
-			rsp:say("failed to unlock: ", err)
-		end
-		rsp:say("unlock: ", ok)
-	end
-end
 
 return function(req, rsp)
-	test_shdict()
 	-- test_upload(req, rsp)
 	-- test_coroutine(req, rsp)
 

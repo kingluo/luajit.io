@@ -419,6 +419,13 @@ local function try_file(req, rsp, cfg)
 	return sent
 end
 
+local function match_aux(...)
+	local n_capture = select("#", ...)
+	if n_capture > 0 then
+		return {...}
+	end
+end
+
 local function do_location(req, rsp)
 	local match_srv
 	local srv_list = g_http_cfg.srv_tbl[req.sock.srv_port][req.sock.srv_ip]
@@ -512,20 +519,15 @@ local function do_location(req, rsp)
 			for _,slcf in ipairs(shash.pattern) do
 				local modifier,pat = slcf[1],slcf[2]
 				if modifier == "~" then
-					if strfind(path, pat) then
-						location = slcf
-						break
-					end
+					req.match_data = match_aux(strmatch(path, pat))
 				elseif modifier == "~*" then
-					if strfind(string.lower(path), string.lower(pat)) then
-						location = slcf
-						break
-					end
+					req.match_data = match_aux(strmatch(lower(path), lower(pat)))
 				elseif modifier == "f"  then
-					if pat(req) then
-						location = slcf
-						break
-					end
+					req.match_data = match_aux(pat(req))
+				end
+				if req.match_data then
+					location = slcf
+					break
 				end
 			end
 		end

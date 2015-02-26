@@ -53,15 +53,20 @@ require("http") {
 			--
 			-- {<modifier>, (<pattern> | <match function>), (<module> | <inline function>), ...}
 			--
-			{"=", "/test2", function(req, rsp) rsp:say("test2\n") end},
+			{"=", "/test2", function(req, rsp) rsp:say("hello world!") end},
 			{"^", "/foobar", "foobar_mod"},
 			{"$", "luax", "http.luax", alias = "WEB-INF/luax/"},
 			{
 				"f",
 				function(req)
-					return string.find(req.url:path(), "^/test")
+					if string.find(req.headers["user-agent"], "curl") then
+						return string.match(req.url:path(), "^/test/([a-zA-Z0-9_/]*)")
+					end
 				end,
-				"test",
+				function(req, rsp)
+					local test = "test." .. string.gsub(req.match_data[1], "/", ".")
+					return require(test)(req, rsp)
+				end,
 				gzip_types = {
 					["application/json"] = true,
 				}
