@@ -152,6 +152,29 @@ function _M.get(self, key)
 	return v
 end
 
+local null = ffi.new("void*")
+function _M.get_keys(self, max_count)
+	max_count = max_count or 1024
+	local t = {}
+	local count = 0
+	local dir = C.opendir(self.path)
+	while true do
+		local dent = C.readdir(dir)
+		if dent == nil then break end
+		local key = ffi.string(dent.d_name)
+		if key ~= "." and key ~= ".." then
+			tinsert(t, key)
+			if max_count > 0 then
+				count = count + 1
+				if count >= max_count then
+					break
+				end
+			end
+		end
+	end
+	return unpack(t)
+end
+
 return {
 	init = init,
 	fini = fini,

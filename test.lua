@@ -156,6 +156,7 @@ local function test_shdict()
 	print(test:get("foo"))
 	test:set("foo",98767)
 	print(test:get("foo"))
+	print(test:get_keys())
 end
 
 local function test_db(rsp)
@@ -246,7 +247,7 @@ local function test_lock(req, rsp)
 end
 
 return function(req, rsp)
-	-- test_shdict()
+	test_shdict()
 	-- test_upload(req, rsp)
 	-- test_coroutine(req, rsp)
 
@@ -254,7 +255,7 @@ return function(req, rsp)
 	-- rsp:redirect("/test2?a=1&b=foo&b=bar")
 	-- rsp:exec("/static/test.txt")
 
-	test_lock(req, rsp)
+	-- test_lock(req, rsp)
 
 	return rsp:say("hello world! test handler\n")
 end

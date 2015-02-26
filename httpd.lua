@@ -29,6 +29,7 @@ require("http") {
 	gzip_comp_level = 1,
 	gzip_min_length = 20,
 	gzip_types = {
+		["text/html"] = true,
 		["text/plain"] = true,
 	},
 
@@ -62,7 +63,7 @@ require("http") {
 				end,
 				"test",
 				gzip_types = {
-					["text/plain"] = true,
+					["application/json"] = true,
 				}
 			},
 		}

@@ -130,6 +130,18 @@ int fcntl(int fd, int cmd, ... /* arg */ );
 typedef long int off_t;
 off_t lseek(int fd, off_t offset, int whence);
 
+void* opendir(const char *name);
+typedef unsigned long int ino_t;
+struct dirent {
+   ino_t          d_ino;       /* inode number */
+   off_t          d_off;       /* offset to the next dirent */
+   unsigned short d_reclen;    /* length of this record */
+   unsigned char  d_type;      /* type of file; not supported
+								  by all file system types */
+   char           d_name[256]; /* filename */
+};
+struct dirent *readdir(void* dirp);
+
 static const int F_SETLKW = 7;
 static const short int F_RDLCK         =0;
 static const short int F_WRLCK         =1;
