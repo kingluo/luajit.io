@@ -177,8 +177,7 @@ local function test_db(rsp)
 	db:set_keepalive()
 end
 
-local function test_post_args()
-	local args = req:get_post_args()
+local function print_args(args)
 	for k,v in pairs(args) do
 		print("key=" .. k)
 		if type(v) == "table" then
@@ -189,6 +188,14 @@ local function test_post_args()
 			print("value=" .. tostring(v))
 		end
 	end
+end
+
+local function test_post_args()
+	print_args(req:get_post_args())
+end
+
+local function test_uri_args()
+	print_args(req:get_uri_args())
 end
 
 local function test_coroutine(req, rsp)
@@ -226,5 +233,10 @@ return function(req, rsp, cf, extra)
 	-- test_shdict()
 	-- test_upload(req, rsp)
 	-- test_coroutine(req, rsp)
+
+	-- rsp:exec("/test2", {a=1,b={"foo bar","barfoo"}})
+	-- rsp:redirect("/test2?a=1&b=foo&b=bar")
+	-- rsp:exec("/static/test.txt")
+
 	return rsp:say("hello world! test handler\n")
 end

@@ -5,6 +5,7 @@ local M = {}
 
 local status_tbl = {
 	[200] = "HTTP/1.1 200 OK\r\n";
+	[302] = "HTTP/1.1 302 Found\r\n";
 	[400] = "HTTP/1.1 400 Bad Request\r\n";
 	[403] = "HTTP/1.1 403 Forbidden\r\n";
 	[404] = "HTTP/1.1 404 Not Found\r\n";

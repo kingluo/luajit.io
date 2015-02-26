@@ -2,6 +2,7 @@ local C = require("cdef")
 local ffi = require("ffi")
 local tcp = require("socket.tcp")
 local URI = require("uri")
+local uri_encode = require("uri._util").uri_encode
 local uri_decode = require("uri._util").uri_decode
 
 local filter = require("http.filter")
@@ -13,15 +14,17 @@ local strfind = string.find
 local strmatch = string.match
 local strgsub = string.gsub
 local strformat = string.format
+
 local tinsert = table.insert
 local tsort = table.sort
+local tconcat = table.concat
 
 local function unescape(s)
 	s = strgsub(s,"+"," ")
 	return uri_decode(s)
 end
 
-local function parse_uri_args(query)
+local function decode_args(query)
 	local uri_args = {}
 	local i = 0
 	local j = 0
@@ -141,7 +144,7 @@ end
 
 function http_req_mt.__index.get_uri_args(self)
 	if not self.uri_args then
-		self.uri_args = parse_uri_args(self.url:query())
+		self.uri_args = decode_args(self.url:query())
 	end
 	return self.uri_args
 end
@@ -150,7 +153,7 @@ function http_req_mt.__index.get_post_args(self)
 	if self.method ~= "POST" then return nil, "not POST" end
 	if not self.post_args then
 		receive_body(self.sock, self.headers, function(chunk)
-			self.post_args = parse_uri_args(chunk)
+			self.post_args = decode_args(chunk)
 		end)
 	end
 	return self.post_args
@@ -209,8 +212,71 @@ function http_rsp_mt.__index.exit(self, status)
 	return coroutine.exit()
 end
 
+function http_rsp_mt.__index.encode_args(self, args)
+	local t = {}
+	for k,v in pairs(args) do
+		k = uri_encode(k)
+		if type(v) == "table" then
+			for _,v2 in ipairs(v) do
+				if type(v2) == "string" then
+					v2 = uri_encode(v2)
+				end
+				tinsert(t, k .. "=" .. v2)
+			end
+		else
+			if type(v) == "string" then
+				v = uri_encode(v)
+			end
+			tinsert(t, k .. "=" .. v)
+		end
+	end
+	return tconcat(t, "&")
+end
+
+function http_rsp_mt.__index.exec(self, uri, args)
+	if self.headers_sent then
+		print("exec must be taken before any output happens")
+		return false
+	end
+	self.uri_args = nil
+	local path = uri
+	if not args then
+		local i,j = strfind(uri, "?", 1, true)
+		if i then
+			path = strsub(uri, 1, i-1)
+			args = strsub(uri, 1, i+1)
+		end
+	else
+		self.uri_args = args
+		args = self:encode_args(args)
+	end
+	self.req.url:path(path)
+	self.req.url:query(args)
+	self.exec = true
+	return coroutine.exit()
+end
+
+function http_rsp_mt.__index.redirect(self, uri, status)
+	if self.headers_sent then
+		print("redirect must be taken before any output happens")
+		return false
+	end
+
+	if strsub(uri,1,1) == "/" then
+		local scheme = self.sock.use_ssl and "https://" or "http://"
+		local port = (self.sock.srv_port ~= 80) and (":" .. self.sock.srv_port) or ""
+		local host = self.req.headers["host"] or (self.sock.srv_ip .. port)
+		uri = scheme .. host .. uri
+	end
+
+	self.headers["Location"] = uri
+	self.status = status or 302
+	return coroutine.exit()
+end
+
 local function http_rsp_new(req, sock)
-	return setmetatable({headers_sent = false, headers = {}, sock = sock, req = req, status=200}, http_rsp_mt)
+	return setmetatable({headers_sent = false, headers = {},
+		sock = sock, req = req, status=200}, http_rsp_mt)
 end
 
 local g_http_cfg
@@ -391,6 +457,8 @@ local function do_location(req, rsp)
 		match_srv = srv_list[1]
 	end
 
+	::location_matching::
+
 	local location
 	if match_srv then
 		local shash = match_srv.location_hash
@@ -462,6 +530,10 @@ local function do_location(req, rsp)
 		assert(type(fn) == 'function')
 		coroutine.spawn(fn, nil, req, rsp)
 		coroutine.wait_descendants()
+		if rsp.exec == true then
+			rsp.exec = false
+			goto location_matching
+		end
 		return rsp:finalize()
 	end
 
