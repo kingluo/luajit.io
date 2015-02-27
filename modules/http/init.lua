@@ -301,6 +301,26 @@ function http_rsp_mt.__index.redirect(self, uri, status)
 	return coroutine.exit(true)
 end
 
+function http_rsp_mt.__index.try_file(self)
+	local req = self.req
+	local lcf = req.lcf or req.srvcf
+	local path = req.url:path()
+	local ext = string.match(path, "%.([^%.]+)$")
+	self.headers["content-type"] = lcf:get_mime_types()[ext] or "application/octet-stream"
+	local fpath = (lcf.root or ".") .. '/' .. path
+	local f = io.open(fpath)
+	if f == nil then return self:finalize(404) end
+	local flen = f:seek('end')
+	f:close()
+	self.headers["content-length"] = flen
+
+	local sent,err = self:sendfile(fpath, 0, flen, true)
+	if err then
+		return self:finalize(404)
+	end
+	return sent
+end
+
 local function http_rsp_new(req, sock)
 	return setmetatable({headers_sent = false, headers = {},
 		sock = sock, req = req, status=200}, http_rsp_mt)
@@ -365,6 +385,7 @@ local function http_parse_conf(cfg)
 			end
 		end
 
+		--#--
 		local tmp = {}
 		for k in pairs(shash.prefix_hash) do
 			tmp[#k] = 1
@@ -374,6 +395,7 @@ local function http_parse_conf(cfg)
 			tinsert(shash.prefix_size_hash, k)
 		end
 		tsort(shash.prefix_size_hash, more_than)
+		shash.prefix_size_hash.n = #shash.prefix_size_hash
 	end
 
 	for port,addresses in pairs(cfg.srv_tbl) do
@@ -403,6 +425,7 @@ local function http_parse_conf(cfg)
 				end
 			end
 
+			--#--
 			local tmp = {}
 			for k in pairs(srv_list.prefix_hash) do
 				tmp[#k] = 1
@@ -412,37 +435,21 @@ local function http_parse_conf(cfg)
 				tinsert(srv_list.prefix_size_hash, k)
 			end
 			tsort(srv_list.prefix_size_hash, more_than)
+			srv_list.prefix_size_hash.n = #srv_list.prefix_size_hash
 
-			srv_list.postfix_size_hash = {}
+			--#--
 			local tmp = {}
 			for k in pairs(srv_list.postfix_hash) do
 				tmp[#k] = 1
 			end
+			srv_list.postfix_size_hash = {}
 			for k in pairs(tmp) do
 				tinsert(srv_list.postfix_size_hash, k)
 			end
 			tsort(srv_list.postfix_size_hash, more_than)
+			srv_list.postfix_size_hash.n = #srv_list.postfix_size_hash
 		end
 	end
-end
-
-local function try_file(req, rsp, cfg)
-	local lcf = req.lcf or req.srvcf
-	local path = req.url:path()
-	local ext = string.match(path, "%.([^%.]+)$")
-	rsp.headers["content-type"] = lcf:get_mime_types()[ext] or "application/octet-stream"
-	local fpath = (cfg.root or ".") .. '/' .. path
-	local f = io.open(fpath)
-	assert(f)
-	local flen = f:seek('end')
-	f:close()
-	rsp.headers["content-length"] = flen
-
-	local sent,err = rsp:sendfile(fpath, 0, flen, true)
-	if err then
-		return rsp:finalize(404)
-	end
-	return sent
 end
 
 local function match_aux(...)
@@ -450,6 +457,54 @@ local function match_aux(...)
 	local ret = select(1, ...)
 	if n_capture > 0 and type(ret) ~= "nil" then
 		return {...}
+	end
+end
+
+local function find_first_less(t, elem)
+	if t.n == 0 then
+		return
+	end
+
+	local m,n = 1,t.n
+	local mid
+	while m <= n do
+		mid = math.floor((m+n)/2)
+		if t[mid] >= elem then
+			m = mid + 1
+		elseif t[mid] < elem then
+			n = mid - 1
+			if n > 0 and t[n] >= elem then
+				break
+			end
+		end
+	end
+
+	if t[mid] < elem then
+		return mid
+	end
+end
+
+local function find_first_less_equal(t, elem)
+	if t.n == 0 then
+		return
+	end
+
+	local m,n = 1,t.n
+	local mid
+	while m <= n do
+		mid = math.floor((m+n)/2)
+		if t[mid] > elem then
+			m = mid + 1
+		elseif t[mid] <= elem then
+			n = mid - 1
+			if n > 0 and t[n] > elem then
+				break
+			end
+		end
+	end
+
+	if t[mid] <= elem then
+		return mid
 	end
 end
 
@@ -467,20 +522,28 @@ local function do_location(req, rsp)
 
 		-- longest wildcard name starting with an asterisk, e.g. "*.example.org"
 		if not match_srv then
-			for _,v in ipairs(srv_list.prefix_size_hash) do
-				if srv_list.prefix_hash[strsub(host, hlen-v+1)] then
-					match_srv = v.srv
-					break
+			local start = find_first_less(srv_list.prefix_size_hash, hlen)
+			if start then
+				for i = start, srv_list.prefix_size_hash.n do
+					local v = srv_list.prefix_size_hash[i]
+					if srv_list.prefix_hash[strsub(host, hlen-v+1)] then
+						match_srv = v.srv
+						break
+					end
 				end
 			end
 		end
 
 		-- longest wildcard name ending with an asterisk, e.g. "mail.*"
 		if not match_srv then
-			for _,v in ipairs(srv_list.postfix_size_hash) do
-				if srv_list.postfix_hash[strsub(host, 1, v)] then
-					match_srv = v.srv
-					break
+			local start = find_first_less(srv_list.postfix_size_hash, hlen)
+			if start then
+				for i = start, srv_list.postfix_size_hash.n do
+					local v = srv_list.postfix_size_hash[i]
+					if srv_list.postfix_hash[strsub(host, 1, v)] then
+						match_srv = v.srv
+						break
+					end
 				end
 			end
 		end
@@ -531,12 +594,16 @@ local function do_location(req, rsp)
 
 		-- prefix match
 		if not match_done then
-			for _,v in ipairs(shash.prefix_size_hash) do
-				local slcf = shash.prefix_hash[strsub(path, 1, v)]
-				if slcf then
-					location = slcf
-					match_done = (slcf[1] == "^~")
-					break
+			local start = find_first_less_equal(shash.prefix_size_hash, pathlen)
+			if start then
+				for i = start, shash.prefix_size_hash.n do
+					local v = shash.prefix_size_hash[i]
+					local slcf = shash.prefix_hash[strsub(path, 1, v)]
+					if slcf then
+						location = slcf
+						match_done = (slcf[1] == "^~")
+						break
+					end
 				end
 			end
 		end
@@ -589,7 +656,7 @@ local function do_location(req, rsp)
 		return rsp:finalize()
 	end
 
-	return try_file(req, rsp, match_srv)
+	return rsp:try_file()
 end
 
 local function http_handler(sock)
