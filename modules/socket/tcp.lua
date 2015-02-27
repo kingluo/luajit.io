@@ -829,6 +829,7 @@ local g_tcp_cfg
 
 local function tcp_parse_conf(cfg)
 	g_tcp_cfg = cfg
+	cfg.conf_path = strmatch(arg[0], ".*/") or "./"
 
 	cfg.user = cfg.user or "nobody"
 	cfg.group = cfg.group or user

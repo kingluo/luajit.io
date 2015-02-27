@@ -279,8 +279,34 @@ end
 
 local g_http_cfg
 
+local function get_mime_types(cf)
+	if cf.mime_types then
+		return cf.mime_types
+	else
+		cf.mime_types = {}
+	end
+	local path = cf.types
+	if strsub(cf.types,1,1) ~= "/" then
+		path = cf.conf_path .. "/" .. cf.types
+	end
+	local f = io.open(path)
+	assert(f)
+	local data = f:read("*a")
+	assert(data)
+	for typ,exts in string.gmatch(data, "([^;%s]+)%s+([a-zA-Z0-9%s]+);") do
+		for ext in string.gmatch(exts, "%w+") do
+			cf.mime_types[ext] = typ
+		end
+	end
+	f:close()
+	return cf.mime_types
+end
+
 local function http_parse_conf(cfg)
 	g_http_cfg = cfg
+
+	cfg.get_mime_types = get_mime_types
+	cfg:get_mime_types()
 
 	local function more_than(a,b)
 		return a > b
@@ -372,24 +398,11 @@ local function http_parse_conf(cfg)
 	end
 end
 
-local mime_types = {
-	["txt"] = "text/plain",
-	["html"] = "text/html",
-	["htm"] = "text/html",
-	["shtml"] = "text/html",
-	["css"] = "text/css",
-	["xml"] = "text/xml",
-	["rss"] = "text/xml",
-	["gif"] = "image/gif",
-	["jpeg"] = "image/jpeg",
-	["jpg"] = "image/jpeg",
-	["js"] = "application/x-javascript",
-}
-
 local function try_file(req, rsp, cfg)
+	local lcf = req.lcf or req.srvcf
 	local path = req.url:path()
 	local ext = string.match(path, "%.([^%.]+)$")
-	rsp.headers["content-type"] = mime_types[ext] or "application/octet-stream"
+	rsp.headers["content-type"] = lcf:get_mime_types()[ext] or "application/octet-stream"
 	local fpath = (cfg.root or ".") .. '/' .. path
 	local f = io.open(fpath)
 	assert(f)

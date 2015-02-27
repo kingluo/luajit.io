@@ -33,6 +33,8 @@ require("http") {
 		["text/plain"] = true,
 	},
 
+	types = "mime.types",
+
 	-- Server blocks
 	-- Refer to http://nginx.org/en/docs/http/request_processing.html
 	{
@@ -53,14 +55,14 @@ require("http") {
 			--
 			-- {<modifier>, (<pattern> | <match function>), (<module> | <inline function>), ...}
 			--
-			{"=", "/test2", function(req, rsp) rsp:say("hello world!") end},
+			{"=", "/hello", function(req, rsp) rsp:say("hello world!") end},
 			{"^", "/foobar", "foobar_mod"},
 			{"$", "luax", "http.luax", alias = "WEB-INF/luax/"},
 			{
 				"f",
 				function(req)
 					if string.find(req.headers["user-agent"], "curl") then
-						return string.match(req.url:path(), "^/test/([a-zA-Z0-9_/]*)")
+						return string.match(req.url:path(), "^/test/([a-zA-Z0-9_%-/]*)")
 					end
 				end,
 				function(req, rsp)
