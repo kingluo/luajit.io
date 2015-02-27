@@ -236,7 +236,7 @@ end
 
 function http_rsp_mt.__index.exit(self, status)
 	if not self.status then self.status = status end
-	return coroutine.exit()
+	return coroutine.exit(true)
 end
 
 function http_rsp_mt.__index.encode_args(self, args)
@@ -280,7 +280,7 @@ function http_rsp_mt.__index.exec(self, uri, args)
 	self.req.url:path(path)
 	self.req.url:query(args)
 	self.exec = true
-	return coroutine.exit()
+	return coroutine.exit(true)
 end
 
 function http_rsp_mt.__index.redirect(self, uri, status)
@@ -298,7 +298,7 @@ function http_rsp_mt.__index.redirect(self, uri, status)
 
 	self.headers["Location"] = uri
 	self.status = status or 302
-	return coroutine.exit()
+	return coroutine.exit(true)
 end
 
 local function http_rsp_new(req, sock)
@@ -575,15 +575,17 @@ local function do_location(req, rsp)
 
 		local handler = coroutine.spawn(fn, nil, req, rsp)
 		local ret, err = coroutine.wait(handler)
-		if ret == false and err ~= "exited" then
+		if ret == false and err ~= "exit_group" and err ~= "exit" then
 			return rsp:finalize(500)
 		end
 
 		coroutine.wait_descendants()
+
 		if rsp.exec == true then
 			rsp.exec = false
 			goto location_matching
 		end
+
 		return rsp:finalize()
 	end
 

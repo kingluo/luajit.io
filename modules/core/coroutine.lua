@@ -47,11 +47,12 @@ local function handle_dead_co(co, ...)
 
 	local parent = cinfo.parent
 	if parent then
-		co_info[parent].exit_childs[co] = {...}
-		if co_wait_list[parent] == false then
-			co_wait_list[parent] = true
+		if co_info[parent] then
+			co_info[parent].exit_childs[co] = {...}
+			if co_wait_list[parent] == false then
+				co_wait_list[parent] = true
+			end
 		end
-
 		local ancestor = cinfo.ancestor
 		if ancestor then
 			ancestor = co_info[ancestor]
@@ -90,9 +91,9 @@ local function co_resume_ll(co, ret, ...)
 			local cur = coroutine.running()
 			if cur == nil or co_info[cur].parent == nil then
 				local ancestor = cur or co_info[co].ancestor or co
+				handle_dead_co(co, ret, ...)
 				kill_descendants(ancestor)
-				if ancestor == co then handle_dead_co(co, ret, ...) end
-				return false, "exited"
+				return false, "exit_group"
 			else
 				error(err, 0)
 			end

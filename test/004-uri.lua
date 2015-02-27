@@ -1,22 +1,22 @@
-local function print_args(args)
+local function print_args(rsp, args)
 	for k,v in pairs(args) do
-		print("key=" .. k)
+		rsp:say("key=" .. k)
 		if type(v) == "table" then
 			for _,v1 in ipairs(v) do
-				print("value=" .. v1)
+				rsp:say("value=" .. v1)
 			end
 		else
-			print("value=" .. tostring(v))
+			rsp:say("value=" .. tostring(v))
 		end
 	end
 end
 
 local function test_post_args(req, rsp)
-	print_args(req:get_post_args())
+	print_args(rsp, req:get_post_args())
 end
 
 local function test_uri_args(req, rsp)
-	print_args(req:get_uri_args())
+	print_args(rsp, req:get_uri_args())
 end
 
 return function(req, rsp)
