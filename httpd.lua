@@ -1,4 +1,5 @@
-package.path = package.path .. ";./modules/?.lua;./modules/?/init.lua"
+conf_path = string.match(arg[0], ".*/") or "./"
+package.path = package.path .. ";" .. conf_path .. "/modules/?.lua;" .. conf_path .. "/modules/?/init.lua"
 
 require("http") {
 	-- toggle strict global env
@@ -56,8 +57,9 @@ require("http") {
 			-- {<modifier>, (<pattern> | <match function>), (<module> | <inline function>), ...}
 			--
 			{"=", "/hello", function(req, rsp) rsp:say("hello world!") end},
-			{"^", "/foobar", "foobar_mod"},
+			{"^", "/foobar", "/foo/bar/module"},
 			{"$", "luax", "http.luax", alias = "WEB-INF/luax/"},
+			--{"^", "/", function(req, rsp) return rsp:finalize(403) end},
 			{
 				"f",
 				function(req)

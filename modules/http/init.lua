@@ -179,7 +179,9 @@ function http_rsp_mt.__index.print(self, ...)
 end
 
 function http_rsp_mt.__index.say(self, ...)
-	return self:print(..., "\n")
+	local buf = self.bufpool:get(...)
+	buf:append("\n")
+	return run_next_body_filter(self, buf)
 end
 
 function http_rsp_mt.__index.sendfile(self, path, offset, size, eof)
@@ -198,10 +200,37 @@ function http_rsp_mt.__index.flush(self)
 	return run_next_body_filter(self, buf)
 end
 
+local special_rsp_template = [[
+<html>
+<head><title>$status</title></head>
+<body bgcolor="white">
+<center><h1>$status</h1></center>
+<hr><center>nginx</center>
+</body>
+</html>
+]]
+
+local function content_aux(status)
+	return string.gsub(special_rsp_template, "%$(%w+)", {status=status})
+end
+
+local special_rsp = {
+	[302] = content_aux("302 Found");
+	[400] = content_aux("400 Bad Request");
+	[403] = content_aux("403 Forbidden");
+	[404] = content_aux("404 Not Found");
+	[500] = content_aux("500 Internal Server Error");
+	[501] = content_aux("501 Not Implemented");
+	[503] = content_aux("503 Service Unavailable");
+}
+
 function http_rsp_mt.__index.finalize(self, status)
-	if not self.status then self.status = status end
+	if status then self.status = status end
 	local buf = self.bufpool:get()
 	buf.eof = true
+	if not self.headers_sent then
+		buf:append(special_rsp[self.status])
+	end
 	return run_next_body_filter(self, buf)
 end
 
@@ -302,15 +331,14 @@ local function get_mime_types(cf)
 	return cf.mime_types
 end
 
+local function more_than(a,b)
+	return a > b
+end
+
 local function http_parse_conf(cfg)
 	g_http_cfg = cfg
 
 	cfg.get_mime_types = get_mime_types
-	cfg:get_mime_types()
-
-	local function more_than(a,b)
-		return a > b
-	end
 
 	local global_mt = {__index=cfg}
 	for _,srv in ipairs(cfg) do
@@ -538,7 +566,11 @@ local function do_location(req, rsp)
 	if location then
 		local fn = location[3]
 		if type(fn) == 'string' then
-			fn = require(fn)
+			local ret
+			ret,fn = pcall(require, fn)
+			if ret == false then
+				return rsp:finalize(500)
+			end
 		end
 
 		local handler = coroutine.spawn(fn, nil, req, rsp)
