@@ -70,7 +70,9 @@ function M.body_filter(rsp, ...)
 	local gzip = rsp.gzip
 	if not gzip.strm then
 		gzip.strm = ffi.new("z_stream")
-		assert(zlib.deflateInit2_(gzip.strm, rsp.req.lcf.gzip_comp_level or 1,
+		local lcf = rsp.req.lcf or rsp.req.srvcf
+		local level = lcf.gzip_comp_level or 1
+		assert(zlib.deflateInit2_(gzip.strm, level,
 			C.Z_DEFLATED, 31, 8, 0,
 			ZLIB_VERSION, ffi.sizeof(gzip.strm)) == C.Z_OK)
 	end
@@ -107,18 +109,20 @@ function M.body_filter(rsp, ...)
 					flush = buf.flush
 					eof = buf.eof
 				end
-				local ret,err = M.next_body_filter(rsp, {size=#str, str, flush=flush, eof=eof})
+				local buf2 = rsp.bufpool:get(str)
+				buf2.flush = flush
+				buf2.eof = eof
+				local ret,err = M.next_body_filter(rsp, buf2)
 				if err then return ret,err end
 				if sz < chunksz or size == 0 then break end
 			end
 			assert(C.close(fd) == 0)
+			rsp.bufpool:put(buf)
 		else
 			assert(buf.size < CHUNK)
 			assert(copy_buf(buf) == buf.size)
 			local ret,str = compress_chunk(gzip.strm, buf.size, flush)
-			for i=2,#buf do buf[i] = nil end
-			buf.size = #str
-			buf[1] = str
+			buf:swap(str)
 			local ret,err = M.next_body_filter(rsp, buf)
 			if err then return ret,err end
 		end

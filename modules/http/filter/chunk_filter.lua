@@ -23,18 +23,15 @@ function M.body_filter(rsp, ...)
 		local buf = select(i, ...)
 		if buf.size > 0 then
 			local size = strformat("%X\r\n", buf.size)
-			buf.size = buf.size + #eol
-			tinsert(buf, eol)
+			buf:append(eol)
 			if buf.eof then
-				buf.size = buf.size + #eof
-				tinsert(buf, eof)
+				buf:append(eof)
 			end
-			local ret,err = M.next_body_filter(rsp, {size=#size, size}, buf)
+			local ret,err = M.next_body_filter(rsp, rsp.bufpool:get(size), buf)
 			if err then return ret,err end
 		else
 			if buf.eof then
-				buf.size = buf.size + #eof
-				tinsert(buf, eof)
+				buf:swap(eof)
 			end
 			local ret,err = M.next_body_filter(rsp, buf)
 			if err then return ret,err end

@@ -9,6 +9,8 @@ local filter = require("http.filter")
 local run_next_header_filter = filter.run_next_header_filter
 local run_next_body_filter = filter.run_next_body_filter
 
+local create_bufpool = require("http.buf")
+
 local strsub = string.sub
 local strfind = string.find
 local strmatch = string.match
@@ -165,59 +167,42 @@ local function http_req_new(method, url, headers, sock)
 		headers = headers, sock = sock}, http_req_mt)
 end
 
-local http_rsp_mt = {__index={}}
+local http_rsp_mt = {__index = {bufpool = create_bufpool(100)}}
 
 function http_rsp_mt.__index.send_headers(self)
 	return run_next_header_filter(self)
 end
 
-local function calc_buf_size(buf)
-	local size = 0
-	for i,v in ipairs(buf) do
-		local typ = type(v)
-		if typ == "table" then
-			size = size + calc_buf_size(v)
-		else
-			if typ ~= "string" then
-				buf[i] = tostring(v)
-				v = buf[i]
-			end
-			size = size + #v
-		end
-	end
-	return size
+function http_rsp_mt.__index.print(self, ...)
+	local buf = self.bufpool:get(...)
+	return run_next_body_filter(self, buf)
 end
 
 function http_rsp_mt.__index.say(self, ...)
-	local buf = {size=0, ...}
-
-	-- supply nil arguments
-	local n_arg = select("#", ...)
-	if #buf ~= n_arg then
-		for i=1,n_arg do
-			local arg = select(i, ...)
-			if type(arg) == "nil" then
-				tinsert(buf, i, "nil")
-			end
-		end
-	end
-
-	buf.size = calc_buf_size(buf)
-	return run_next_body_filter(self, buf)
+	return self:print(..., "\n")
 end
 
 function http_rsp_mt.__index.sendfile(self, path, offset, size, eof)
-	local buf = {is_file=true, path=path, offset=offset, size=size, eof=eof}
+	local buf = self.bufpool:get()
+	buf.is_file = true
+	buf.path = path
+	buf.offset = offset
+	buf.size = size
+	buf.eof = eof
 	return run_next_body_filter(self, buf)
 end
 
-function http_rsp_mt.__index.flush(self, status)
-	return run_next_body_filter(self, {size=0, flush=true})
+function http_rsp_mt.__index.flush(self)
+	local buf = self.bufpool:get()
+	buf.flush = true
+	return run_next_body_filter(self, buf)
 end
 
 function http_rsp_mt.__index.finalize(self, status)
 	if not self.status then self.status = status end
-	return run_next_body_filter(self, {size=0, eof=true})
+	local buf = self.bufpool:get()
+	buf.eof = true
+	return run_next_body_filter(self, buf)
 end
 
 function http_rsp_mt.__index.exit(self, status)
@@ -421,7 +406,8 @@ end
 
 local function match_aux(...)
 	local n_capture = select("#", ...)
-	if n_capture > 0 then
+	local ret = select(1, ...)
+	if n_capture > 0 and type(ret) ~= "nil" then
 		return {...}
 	end
 end

@@ -15,15 +15,18 @@ local status_tbl = {
 }
 
 local postpone_output = 1460
+local eol = "\r\n"
+local sep = ": "
 
 function M.header_filter(rsp)
 	local lcf = rsp.req.lcf or rsp.req.srvcf
 
-	local status = status_tbl[rsp.status or 200] or status_tbl[500]
+	local status = status_tbl[rsp.status or 200]
+	assert(status)
 	local ret,err = rsp.sock:send(status)
 	if err then return nil,err end
 
-	if not rsp.headers["content-type"] then
+	if rsp.headers["content-type"] == nil then
 		rsp.headers["content-type"] = lcf.default_type
 	end
 
@@ -37,22 +40,14 @@ function M.header_filter(rsp)
 		rsp.headers["connection"] = "close"
 	end
 
-	rsp.output_buf = {}
-	rsp.output_buf_bytes = 0
-	rsp.output_buf_idx = 1
-
-	local tbl = rsp.output_buf
-	local eol = "\r\n"
-	local sep = ": "
-	for f, v in pairs(rsp.headers) do
-		tinsert(tbl, f)
-		tinsert(tbl, sep)
-		tinsert(tbl, v)
-		tinsert(tbl, eol)
+	local buf = rsp.bufpool:get()
+	for f,v in pairs(rsp.headers) do
+		buf:append(f, sep, v, eol)
 	end
-	tinsert(tbl, eol)
+	buf:append(eol)
 
-	local ret,err = rsp.sock:send(tbl)
+	local ret,err = rsp.sock:send(buf)
+	rsp.bufpool:put(buf)
 	if err then return nil,err end
 	rsp.headers_sent = true
 
@@ -60,11 +55,18 @@ function M.header_filter(rsp)
 end
 
 local function flush_body(rsp)
-	if rsp.output_buf_bytes > 0 then
-		rsp.output_buf[rsp.output_buf_idx] = nil
-		rsp.output_buf_idx = 1
-		rsp.output_buf_bytes = 0
-		local ret,err = rsp.sock:send(rsp.output_buf)
+	if rsp.buffers_bytes > 0 then
+		rsp.buffers[rsp.buffers_idx] = nil
+		local ret,err = rsp.sock:send(rsp.buffers)
+
+		for i=1,rsp.buffers_idx-1 do
+			rsp.bufpool:put(rsp.buffers[i])
+			rsp.buffers[i] = nil
+		end
+
+		rsp.buffers_idx = 1
+		rsp.buffers_bytes = 0
+
 		if err then return nil,err end
 		rsp.body_sent = true
 	end
@@ -73,27 +75,33 @@ local function flush_body(rsp)
 end
 
 function M.body_filter(rsp, ...)
-	assert(rsp.output_buf)
+	if rsp.buffers == nil then
+		rsp.buffers = {}
+		rsp.buffers_bytes = 0
+		rsp.buffers_idx = 1
+	end
 
 	for i=1,select("#", ...) do
 		local buf = select(i, ...)
+		local eof = buf.eof
 		if buf.is_file then
 			local ret,err = flush_body(rsp)
 			if err then return ret,err end
 			local ret,err = rsp.sock:sendfile(buf.path, buf.offset, buf.size)
 			if err then return ret,err end
+			rsp.bufpool:put(buf)
 		elseif buf.size > 0 then
-			rsp.output_buf[rsp.output_buf_idx] = buf
-			rsp.output_buf_bytes = rsp.output_buf_bytes + buf.size
-			rsp.output_buf_idx = rsp.output_buf_idx + 1
+			rsp.buffers[rsp.buffers_idx] = buf
+			rsp.buffers_bytes = rsp.buffers_bytes + buf.size
+			rsp.buffers_idx = rsp.buffers_idx + 1
 		end
 
-		if buf.flush or buf.eof or rsp.output_buf_bytes >= postpone_output then
+		if buf.flush or eof or rsp.buffers_bytes >= postpone_output then
 			local ret,err = flush_body(rsp)
 			if err then return ret,err end
 		end
 
-		if buf.eof then
+		if eof then
 			rsp.eof = true
 			break
 		end
