@@ -229,7 +229,10 @@ function http_rsp_mt.__index.finalize(self, status)
 	local buf = self.bufpool:get()
 	buf.eof = true
 	if not self.headers_sent then
-		buf:append(special_rsp[self.status])
+		local str = special_rsp[self.status]
+		self.headers["content-type"] = "text/html"
+		self.headers["content-length"] = #str
+		buf:append(str)
 	end
 	return run_next_body_filter(self, buf)
 end

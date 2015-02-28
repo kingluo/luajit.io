@@ -20,7 +20,7 @@ function M.header_filter(rsp)
 	if typ then
 		typ = string.match(typ, "[^;]+")
 	end
-	if lcf.gzip and rsp.status == 200
+	if lcf.gzip and (rsp.status == 200 or rsp.status == 403 or rsp.status == 404)
 		and (lcf.gzip_min_length == nil or (len == nil or len >= lcf.gzip_min_length))
 		and (lcf.gzip_types == nil or (typ == nil or lcf.gzip_types[typ]
 			or srvcf.gzip_types[typ])) then
@@ -122,6 +122,10 @@ function M.body_filter(rsp, ...)
 			assert(buf.size < CHUNK)
 			assert(copy_buf(buf) == buf.size)
 			local ret,str = compress_chunk(gzip.strm, buf.size, flush)
+			if ret == C.Z_STREAM_END then
+				assert(buf.eof)
+				zlib.deflateEnd(gzip.strm)
+			end
 			buf:swap(str)
 			local ret,err = M.next_body_filter(rsp, buf)
 			if err then return ret,err end
