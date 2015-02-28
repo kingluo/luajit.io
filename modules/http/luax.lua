@@ -62,7 +62,7 @@ local function service(req, rsp)
 	local path = req.url:path()
 	if not luax_cache[path] then
 		local fpath = {(req.lcf.root or "."), "", path}
-		if req.lcf.alias then fpath[2] = req.lcf.alias end
+		if req.lcf.luax_prefix then fpath[2] = req.lcf.luax_prefix end
 		fpath = table.concat(fpath, "/")
 		local f = io.open(fpath)
 		assert(f)

@@ -57,10 +57,9 @@ require("http") {
 			-- {<modifier>, (<pattern> | <match function>), (<module> | <inline function>), ...}
 			--
 			{"=", "/hello", function(req, rsp) rsp:say("hello world!") end},
-			{"$", "luax", "http.luax", alias = "/luax/"},
+			{"$", "luax", "http.luax", luax_prefix = "/WEB-INF/luax/"},
 			{"^~", "/foobar", "foo.bar.module"},
-			{"^~", "/static/", function(req, rsp) return rsp:try_file() end},
-			{"^", "/", function(req, rsp) return rsp:finalize(404) end},
+			{"^~", "/WEB-INF/", function(req, rsp) return rsp:finalize(403) end},
 			{
 				"f",
 				function(req)
