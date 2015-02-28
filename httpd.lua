@@ -40,7 +40,7 @@ require("http") {
 	-- Refer to http://nginx.org/en/docs/http/request_processing.html
 	{
 		listen = {
-			{port = 8080, default_server = true, ssl = false},
+			{port = 8080, default_server = true, ssl = true},
 			{address = "unix:/var/run/test.sock"}
 		},
 		server_name = {"example.org", "*.example.com", "~my%d+web%.org"},
@@ -57,7 +57,7 @@ require("http") {
 			-- {<modifier>, (<pattern> | <match function>), (<module> | <inline function>), ...}
 			--
 			{"=", "/hello", function(req, rsp) rsp:say("hello world!") end},
-			{"$", "luax", "http.luax", alias = "WEB-INF/luax/"},
+			{"$", "luax", "http.luax", alias = "/luax/"},
 			{"^~", "/foobar", "foo.bar.module"},
 			{"^~", "/static/", function(req, rsp) return rsp:try_file() end},
 			{"^", "/", function(req, rsp) return rsp:finalize(404) end},

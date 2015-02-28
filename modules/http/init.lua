@@ -92,56 +92,92 @@ local function receive_headers(sock, headers)
 	return headers
 end
 
-local function receive_body(sock, headers, chunk_handler)
-	local length = tonumber(headers["content-length"])
-	if not length or length < 0 then return false, 'invalid content-length' end
-	local t = headers["transfer-encoding"]
-	if t and t ~= "identity" then
-		while true do
-			local line, err = sock:receive()
-			if err then return false, err end
-			-- get chunk size, skip extention
-			local size = tonumber(strgsub(line, ";.*", ""), 16)
-			if not size then return false, "invalid chunk size" end
-			-- was it the last chunk?
-			if size > 0 then
-				-- if not, get chunk and skip terminating CRLF
-				local chunk, err = sock:receive(size)
-				if chunk then sock:receive() else return false, err end
-				chunk_handler(chunk)
-			else
-				-- if it was, read trailers into headers table
-				receive_headers(sock, headers)
-				break
-			end
-		end
-	elseif length then
-		local len
-		while true do
-			if length > 4096 then
-				len = 4096
-			elseif length == 0 then
-				break
-			else
-				assert(length > 0)
-				len = length
-			end
-			length = length - len
-			local chunk, err = sock:receive(len)
-			chunk_handler(chunk)
-		end
-		return true
+local http_req_mt = {__index={}}
+
+function http_req_mt.__index.read_chunk(self)
+	if self.headers["transfer-encoding"] ~= "chunked" then
+		return nil, "not chunked"
 	end
-	return false, 'invalid body'
+
+	local sock = self.sock
+	local read_quota = sock.read_quota
+	sock.read_quota = nil
+
+	local line, err = sock:receive()
+	if err then
+		sock.read_quota = read_quota
+		return nil, err
+	end
+
+	local size = tonumber(strgsub(line, ";.*", ""), 16)
+	if not size then
+		sock.read_quota = read_quota
+		return nil, "invalid chunk size"
+	end
+
+	if size > 0 then
+		local chunk, err = sock:receive(size)
+		if chunk then
+			sock:receive()
+		else
+			sock.read_quota = read_quota
+			return nil, err
+		end
+		sock.read_quota = read_quota
+		return chunk
+	end
+
+	receive_headers(sock, self.headers)
+	sock.read_quota = read_quota
 end
 
-local http_req_mt = {__index={}}
-function http_req_mt.__index.read_body(self, sink)
-	if self.method ~= 'POST' then return "only support POST" end
-	if not self.body_read then
-		receive_body(self.sock, self.headers, sink)
-		self.body_read = true
+function http_req_mt.__index.discard_body(self)
+	if self.headers["transfer-encoding"] == "chunked" then
+		repeat
+			local chunk = self:read_chunk()
+		until chunk == nil
+		return
 	end
+
+	assert(self.sock.read_quota)
+	if self.sock.stats.consume == self.sock.read_quota then
+		return
+	end
+
+	local sock = self.sock
+	local rbuf = sock.rbuf
+	if sock.read_quota <= sock.stats.rbytes then
+		local pending = sock.read_quota - sock.stats.consume
+		C.memmove(rbuf.buf, rbuf.buf + pending, pending)
+		rbuf.rp = rbuf.rp - pending
+		rbuf.cp = rbuf.cp - pending
+		if rbuf.cp < rbuf.buf then rbuf.cp = rbuf.buf end
+		sock.stats.consume = sock.read_quota
+		return
+	end
+
+	local pending = sock.read_quota - sock.stats.rbytes
+	local read_hook = sock.hook.read
+	local rbytes = 0
+	sock.hook.read = function(self, rbuf, size)
+		local len, err = read_hook(self, rbuf, size)
+		if err then return len,err end
+		if len > 0 then
+			rbytes = rbytes + len
+			if rbytes >= pending then
+				local left = rbytes - pending
+				C.memmove(rbuf.buf, rbuf.rp - left, left)
+				rbuf.rp = rbuf.buf + left
+				rbuf.cp = rbuf.buf
+				return left, "discard_body done"
+			end
+		end
+		rbuf.rp = rbuf.buf
+		return 0
+	end
+
+	assert(sock:receive("*a") == "")
+	sock.hook.read = read_hook
 end
 
 function http_req_mt.__index.get_uri_args(self)
@@ -152,18 +188,25 @@ function http_req_mt.__index.get_uri_args(self)
 end
 
 function http_req_mt.__index.get_post_args(self)
-	if self.method ~= "POST" then return nil, "not POST" end
-	if not self.post_args then
-		receive_body(self.sock, self.headers, function(chunk)
-			self.post_args = decode_args(chunk)
-		end)
+	if self.post_args then
+		return self.post_args
 	end
+
+	local typ = self.headers["content-type"]
+	local te = self.headers["transfer-encoding"]
+	if self.method ~= "POST"
+		or typ ~= "application/x-www-form-urlencoded"
+		or (te and te ~= "identity") then
+		return nil, "not available"
+	end
+
+	local body = self.sock:receive("*a")
+	self.post_args = decode_args(body)
 	return self.post_args
 end
 
 local function http_req_new(method, url, headers, sock)
-	return setmetatable({body_read = false,
-		method = method, url = url,
+	return setmetatable({method = method, url = url,
 		headers = headers, sock = sock}, http_req_mt)
 end
 
@@ -225,10 +268,15 @@ local special_rsp = {
 }
 
 function http_rsp_mt.__index.finalize(self, status)
+	if self.finalized then return true end
+	self.finalized = true
+
+	self.req:discard_body()
+
 	if status then self.status = status end
 	local buf = self.bufpool:get()
 	buf.eof = true
-	if not self.headers_sent then
+	if not self.headers_sent and self.status ~= 200 then
 		local str = special_rsp[self.status]
 		self.headers["content-type"] = "text/html"
 		self.headers["content-length"] = #str
@@ -328,6 +376,8 @@ local function http_rsp_new(req, sock)
 	return setmetatable({headers_sent = false, headers = {},
 		sock = sock, req = req, status=200}, http_rsp_mt)
 end
+
+--#--
 
 local g_http_cfg
 
@@ -511,7 +561,7 @@ local function find_first_less_equal(t, elem)
 	end
 end
 
-local function do_location(req, rsp)
+local function handle_http_request(req, rsp)
 	local match_srv
 	local srv_list = g_http_cfg.srv_tbl[req.sock.srv_port][req.sock.srv_ip]
 		or g_http_cfg.srv_tbl[req.sock.srv_port]["*"]
@@ -677,9 +727,11 @@ local function http_handler(sock)
 		local headers = receive_headers(sock)
 		local req = http_req_new(method, uri, headers, sock)
 		local rsp = http_rsp_new(req, sock)
+
 		sock.read_quota = sock.stats.consume + (headers["content-length"] or 0)
-		do_location(req, rsp)
+		handle_http_request(req, rsp)
 		sock.read_quota = nil
+
 		if headers["connection"] == "close" then
 			sock:close()
 			break
