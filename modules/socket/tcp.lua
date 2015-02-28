@@ -199,6 +199,8 @@ local function receive_ll(self, pattern)
 				if r or err then
 					return r,err
 				end
+			elseif pattern == "*a" then
+				rbuf.cp = rbuf.cp + avaliable
 			end
 		end
 
