@@ -110,7 +110,9 @@ end
 
 function tcp_mt.__index.close(self)
 	if not self.closed then
-		if self.hook.close then self.hook.close(self) end
+		if self.hook.shutdown then
+			self.hook.shutdown(self)
+		end
 		C.close(self.fd)
 		self.guard.fd = -1
 		self.closed = true
@@ -615,6 +617,7 @@ function tcp_mt.__index.accept(self)
 	if self.linfo and self.linfo.ssl then
 		sock.hook.read = ssl.read
 		sock.hook.write = ssl.write
+		sock.hook.shutdown = ssl.shutdown
 		sock.use_ssl = true
 	end
 	if self.family == C.AF_INET then

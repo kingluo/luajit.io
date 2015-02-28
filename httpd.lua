@@ -40,7 +40,7 @@ require("http") {
 	-- Refer to http://nginx.org/en/docs/http/request_processing.html
 	{
 		listen = {
-			{port = 8080, default_server = true, ssl = true},
+			{port = 8080, default_server = true, ssl = false},
 			{address = "unix:/var/run/test.sock"}
 		},
 		server_name = {"example.org", "*.example.com", "~my%d+web%.org"},

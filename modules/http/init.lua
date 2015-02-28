@@ -617,7 +617,8 @@ local function do_location(req, rsp)
 				elseif modifier == "~*" then
 					req.match_data = match_aux(strmatch(lower(path), lower(pat)))
 				elseif modifier == "f"  then
-					req.match_data = match_aux(pat(req))
+					local checker = coroutine.spawn(pat, nil, req)
+					req.match_data = match_aux(select(2, coroutine.wait(checker)))
 				end
 				if req.match_data then
 					location = slcf
@@ -677,6 +678,7 @@ local function http_handler(sock)
 		do_location(req, rsp)
 		sock.read_quota = nil
 		if headers["connection"] == "close" then
+			sock:close()
 			break
 		end
 	end

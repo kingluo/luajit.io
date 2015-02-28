@@ -1,5 +1,7 @@
 local ffi = require("ffi")
 local C = require("cdef")
+local utils = require("core.utils")
+
 local cryto = ffi.load("crypto")
 local ssl = ffi.load("ssl")
 local sslctx
@@ -24,7 +26,8 @@ local function ssl_read(self, rbuf, size)
 		rbuf.rp = rbuf.rp + len
 	else
 		local sslerr = ssl.SSL_get_error(self.ssl, len)
-		if sslerr == C.SSL_ERROR_ZERO_RETURN then
+		if sslerr == C.SSL_ERROR_ZERO_RETURN or sslerr == C.SSL_ERROR_SSL then
+			ssl.SSL_set_quiet_shutdown(self.ssl, 1)
 			self:close()
 			err = "closed"
 		elseif sslerr == C.SSL_ERROR_WANT_READ then
@@ -38,6 +41,7 @@ local function ssl_read(self, rbuf, size)
 			if errno == C.EAGAIN then
 				self:yield(YIELD_R)
 			elseif errno ~= C.EINTR then
+				ssl.SSL_set_quiet_shutdown(self.ssl, 1)
 				self:close()
 				err = utils.strerror(errno)
 			end
@@ -64,11 +68,47 @@ local function ssl_write(self, iovec, idx, iovcnt)
 			epoll.add_event(self.ev, C.EPOLLOUT)
 			self:yield(YIELD_W)
 			epoll.del_event(self.ev, C.EPOLLOUT)
-		else
-			error("what now?")
+		elseif sslerr == C.SSL_ERROR_SYSCALL then
+			local errno = ffi.errno()
+			if errno == C.EAGAIN then
+				self:yield(YIELD_W)
+			elseif errno ~= C.EINTR then
+				ssl.SSL_set_quiet_shutdown(self.ssl, 1)
+				self:close()
+				err = utils.strerror(errno)
+			end
 		end
 	end
 	return len
+end
+
+local function ssl_shutdown(self)
+	if coroutine.running() == nil then
+		ssl.SSL_set_quiet_shutdown(self.ssl, 1)
+	end
+	while true do
+		local ret = ssl.SSL_shutdown(self.ssl)
+		local sslerr = 0
+		if ret ~= 1 and ssl.ERR_peek_error() ~= 0 then
+			sslerr = ssl.SSL_get_error(self.ssl, len)
+		end
+		if ret == 1 or sslerr == 0 or sslerr == C.SSL_ERROR_ZERO_RETURN then
+			ssl.SSL_free(self.ssl)
+			self.ssl = nil
+			break
+		end
+		if sslerr == C.SSL_ERROR_WANT_READ then
+			self:yield(YIELD_R)
+		elseif sslerr == C.SSL_ERROR_WANT_WRITE then
+			epoll.add_event(self.ev, C.EPOLLOUT)
+			self:yield(YIELD_W)
+			epoll.del_event(self.ev, C.EPOLLOUT)
+		else
+			ssl.SSL_free(self.ssl)
+			self.ssl = nil
+			break
+		end
+	end
 end
 
 local function init(cfg)
@@ -92,4 +132,5 @@ return {
 	init = init,
 	read = ssl_read,
 	write = ssl_write,
+	shutdown = ssl_shutdown,
 }
