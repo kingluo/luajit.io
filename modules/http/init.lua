@@ -148,11 +148,8 @@ function http_req_mt.__index.discard_body(self)
 	local sock = self.sock
 	local rbuf = sock.rbuf
 	if sock.read_quota <= sock.stats.rbytes then
-		local pending = sock.read_quota - sock.stats.consume
-		C.memmove(rbuf.buf, rbuf.buf + pending, pending)
-		rbuf.rp = rbuf.rp - pending
-		rbuf.cp = rbuf.cp - pending
-		if rbuf.cp < rbuf.buf then rbuf.cp = rbuf.buf end
+		rbuf.cp1 = rbuf.rp
+		rbuf.cp2 = rbuf.rp
 		sock.stats.consume = sock.read_quota
 		return
 	end
@@ -162,19 +159,15 @@ function http_req_mt.__index.discard_body(self)
 	local rbytes = 0
 	sock.hook.read = function(self, rbuf, size)
 		local len, err = read_hook(self, rbuf, size)
-		if err then return len,err end
 		if len > 0 then
 			rbytes = rbytes + len
 			if rbytes >= pending then
 				local left = rbytes - pending
-				C.memmove(rbuf.buf, rbuf.rp - left, left)
-				rbuf.rp = rbuf.buf + left
-				rbuf.cp = rbuf.buf
+				rbuf.rp = rbuf.rp + left
 				return left, "discard_body done"
 			end
 		end
-		rbuf.rp = rbuf.buf
-		return 0
+		return 0,err
 	end
 
 	assert(sock:receive("*a") == "")

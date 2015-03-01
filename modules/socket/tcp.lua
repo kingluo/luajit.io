@@ -127,6 +127,7 @@ function tcp_mt.__index.settimeout(self, msec)
 end
 
 local READ_CHUNK_SIZE = 4096
+local MIN_SPACE = READ_CHUNK_SIZE / 4
 local eol1 = string.byte("\r")
 local eol2 = string.byte("\n")
 ffi.cdef[[ struct buf_gc {void*p;}; ]]
@@ -136,7 +137,7 @@ local function receive_ll(self, pattern)
 	if not self.rbuf then
 		local buf = C.realloc(nil, READ_CHUNK_SIZE)
 		local p = ffi.cast("char*", buf)
-		self.rbuf = {cp=p, rp=p, size=READ_CHUNK_SIZE, buf=p, gc=buf_gc(buf)}
+		self.rbuf = {buf=p, cp1=p, cp2=p, rp=p, size=READ_CHUNK_SIZE, gc=buf_gc(buf)}
 	end
 
 	local rbuf = self.rbuf
@@ -144,23 +145,22 @@ local function receive_ll(self, pattern)
 	local typ = type(pattern)
 
 	while true do
-		local avaliable = rbuf.rp - rbuf.cp
+		local avaliable = rbuf.rp - rbuf.cp2
 		local no_quota = false
 
-		if self.read_quota then
+		if self.read_quota and self.stats.rbytes >= self.read_quota then
 			local quota = self.read_quota - self.stats.consume
-			if avaliable >= quota then
-				avaliable = quota
-				no_quota = true
-			end
+			avaliable = quota - (rbuf.cp2 - rbuf.cp1)
+			no_quota = true
 		end
 
 		if avaliable > 0 then
 			if pattern == "*l" then
-				local cp = C.memchr(rbuf.cp, eol2, avaliable)
+				local cp = C.memchr(rbuf.cp2, eol2, avaliable)
 				cp = ffi.cast("char*", cp)
+				rbuf.cp2 = rbuf.cp2 + avaliable
 				if cp ~= nil then
-					local sz = cp - rbuf.buf
+					local sz = cp - rbuf.cp1
 					self.stats.consume = self.stats.consume + sz + 1
 					if sz > 0 then
 						local p = cp - 1
@@ -168,48 +168,35 @@ local function receive_ll(self, pattern)
 							sz = sz - 1
 						end
 					end
-					local s = ffi.string(rbuf.buf, sz)
-					sz = rbuf.rp - cp - 1
-					C.memmove(rbuf.buf, cp + 1, sz)
-					rbuf.cp = rbuf.buf
-					rbuf.rp = rbuf.buf + sz
-					return s
-				else
-					rbuf.cp = rbuf.cp + avaliable
+					local str = ffi.string(rbuf.cp1, sz)
+					rbuf.cp2 = cp + 1
+					rbuf.cp1 = rbuf.cp2
+					return str
 				end
 			elseif typ == "number" then
-				rbuf.cp = rbuf.cp + avaliable
-				if rbuf.cp - rbuf.buf >= pattern then
-					local s = ffi.string(rbuf.buf, pattern)
-					local sz = rbuf.rp - rbuf.buf - pattern
-					C.memmove(rbuf.buf, rbuf.buf + pattern, sz)
-					rbuf.cp = rbuf.buf
-					rbuf.rp = rbuf.buf + sz
+				rbuf.cp2 = rbuf.cp2 + avaliable
+				if rbuf.cp2 - rbuf.cp1 >= pattern then
+					local str = ffi.string(rbuf.cp1, pattern)
+					rbuf.cp1 = rbuf.cp1 + pattern
+					rbuf.cp2 = rbuf.cp1
 					self.stats.consume = self.stats.consume + pattern
-					return s
+					return str
 				end
 			elseif typ == "function" then
-				local oldcp = rbuf.cp
 				local r,err = pattern(self.rbuf, avaliable)
-				self.stats.consume = self.stats.consume + (rbuf.cp - oldcp)
-				local sz = rbuf.rp - rbuf.cp
-				C.memmove(rbuf.buf, rbuf.cp, sz)
-				rbuf.cp = rbuf.buf
-				rbuf.rp = rbuf.buf + sz
+				self.stats.consume = self.stats.consume + (rbuf.cp2 - rbuf.cp1)
+				rbuf.cp1 = rbuf.cp2
 				if r or err then
 					return r,err
 				end
 			elseif pattern == "*a" then
-				rbuf.cp = rbuf.cp + avaliable
+				rbuf.cp2 = rbuf.cp2 + avaliable
 			end
 		end
 
 		if no_quota then
-			local s = ffi.string(rbuf.buf, rbuf.cp - rbuf.buf)
-			local sz = rbuf.rp - rbuf.cp
-			C.memmove(rbuf.buf, rbuf.cp, sz)
-			rbuf.cp = rbuf.buf
-			rbuf.rp = rbuf.buf + sz
+			local s = ffi.string(rbuf.cp1, rbuf.cp2 - rbuf.cp1)
+			rbuf.cp1 = rbuf.cp2
 			self.stats.consume = self.stats.consume + #s
 			if pattern == "*a" then
 				return s
@@ -217,33 +204,53 @@ local function receive_ll(self, pattern)
 			return nil, "closed", s
 		end
 
-		local sz = rbuf.rp - rbuf.buf
-		assert(sz <= rbuf.size)
-		if (sz == rbuf.size) then
-			local newsize = rbuf.size + READ_CHUNK_SIZE
-			local csz = rbuf.cp - rbuf.buf
-			local buf = C.realloc(rbuf.buf, newsize)
-			assert(buf ~= nil)
-			local p = ffi.cast("char*", buf)
-			rbuf.buf = p
-			rbuf.gc.p = buf
-			rbuf.size = newsize
-			rbuf.cp = p + csz
-			rbuf.rp = p + sz
+		-- adjust the buffer for next read
+		assert(rbuf.rp == rbuf.cp2)
+		local space = rbuf.size - (rbuf.rp - rbuf.buf)
+		assert(space >= 0)
+		if space < MIN_SPACE then
+			local reserved = rbuf.cp2 - rbuf.cp1
+			assert(reserved >= 0)
+			if (rbuf.size - reserved) >= MIN_SPACE then
+				if reserved > 0 then
+					C.memmove(rbuf.buf, rbuf.cp1, reserved)
+					rbuf.cp1 = rbuf.buf
+					rbuf.cp2 = rbuf.buf + reserved
+					rbuf.rp = rbuf.cp2
+				else
+					assert(rbuf.rp == rbuf.cp1)
+					rbuf.cp1 = rbuf.buf
+					rbuf.cp2 = rbuf.buf
+					rbuf.rp = rbuf.buf
+				end
+			else
+				local newsize = rbuf.size + READ_CHUNK_SIZE
+				local buf = C.realloc(rbuf.buf, newsize)
+				assert(buf ~= nil)
+				rbuf.buf = ffi.cast("char*", buf)
+				rbuf.gc.p = buf
+				rbuf.size = newsize
+				rbuf.cp1 = rbuf.buf
+				rbuf.cp2 = rbuf.buf + reserved
+				rbuf.rp = rbuf.cp2
+			end
 		end
 
 		while true do
 			if self.rtimedout then
-				local s = ffi.string(rbuf.buf, rbuf.rp - rbuf.buf)
-				rbuf.cp = rbuf.buf
-				rbuf.rp = rbuf.buf
+				local s = ffi.string(rbuf.cp1, rbuf.cp2 - rbuf.cp1)
+				rbuf.cp1 = rbuf.cp2
+				self.stats.consume = self.stats.consume + #s
 				return nil, "timeout", s
 			end
 
 			local len, err = self.hook.read(self, rbuf, rbuf.size - (rbuf.rp - rbuf.buf))
-			if len and len > 0 then self.stats.rbytes = self.stats.rbytes + len end
+			if len > 0 then
+				self.stats.rbytes = self.stats.rbytes + len
+			end
+
 			if err then
-				local s = ffi.string(rbuf.buf, rbuf.rp - rbuf.buf)
+				local s = ffi.string(rbuf.cp1, rbuf.cp2 - rbuf.cp1)
 				self.stats.consume = self.stats.consume + #s
 				if pattern == "*a" then
 					return s
@@ -251,7 +258,9 @@ local function receive_ll(self, pattern)
 				return nil, err, s
 			end
 
-			if len > 0 then break end
+			if len > 0 then
+				break
+			end
 		end
 	end
 end
@@ -319,17 +328,15 @@ function tcp_mt.__index.receiveuntil(self, pattern, options)
 		end
 
 		return self:receive(function(rbuf, avaliable)
-			local cp = rbuf.cp
-			while cp - rbuf.cp < avaliable do
-				local c = ffi.string(cp, 1)
-				cp = cp + 1
+			for i = 1,avaliable do
+				local c = ffi.string(rbuf.cp2, 1)
+				rbuf.cp2 = rbuf.cp2 + 1
 				node = node[c]
 				if not node then node = dfa.start
 				elseif node == dfa.last then break end
 			end
 
-			data = data .. ffi.string(rbuf.cp, cp - rbuf.cp)
-			rbuf.cp = cp
+			data = data .. ffi.string(rbuf.cp1, rbuf.cp2 - rbuf.cp1)
 
 			local r
 			local n_pat = node[3]
