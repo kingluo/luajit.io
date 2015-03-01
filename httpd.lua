@@ -49,15 +49,14 @@ require("http") {
 		location = {
 			-- Refer to nginx location directive:
 			-- http://nginx.org/en/docs/http/ngx_http_core_module.html#location
-			-- Besides nginx modifiers, three new modifiers added:
-			-- "^" explicitly longest prefix matching
-			-- "$" postfix matching, just after exact matching, return if matched
+			-- Besides nginx modifiers, two new modifiers are added:
+			-- "^" explicitly indicates longest prefix matching
 			-- "f" matching function for arbitrary matching, with same priority as regexp matching
 			--
 			-- {<modifier>, (<pattern> | <match function>), (<module> | <inline function>), ...}
 			--
 			{"=", "/hello", function(req, rsp) rsp:say("hello world!") end},
-			{"$", "luax", "http.luax", luax_prefix = "/WEB-INF/luax/"},
+			{"~*", "%.luax$", "http.luax", luax_prefix = "/WEB-INF/luax/"},
 			{"^~", "/foobar", "foo.bar.module"},
 			{"^~", "/WEB-INF/", function(req, rsp) return rsp:finalize(403) end},
 			{

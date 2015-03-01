@@ -16,6 +16,7 @@ local strfind = string.find
 local strmatch = string.match
 local strgsub = string.gsub
 local strformat = string.format
+local strlower = string.lower
 
 local tinsert = table.insert
 local tsort = table.sort
@@ -419,7 +420,6 @@ local function http_parse_conf(cfg)
 		srv.location_hash = {
 			exact_hash={},
 			prefix_hash={},
-			postfix_hash={}, postfix_hash_len=0,
 			pattern={}
 		}
 		local shash = srv.location_hash
@@ -430,10 +430,10 @@ local function http_parse_conf(cfg)
 				shash.exact_hash[location[2]] = location
 			elseif location[1] == "^" or location[1] == "^~" then
 				shash.prefix_hash[location[2]] = location
-			elseif location[1] == "$" then
-				shash.postfix_hash[location[2]] = location
-				shash.postfix_hash_len = shash.postfix_hash_len + 1
 			else
+				if location[1] == "~*" then
+					location[2] = strlower(location[2])
+				end
 				tinsert(shash.pattern, location)
 			end
 		end
@@ -633,18 +633,6 @@ local function handle_http_request(req, rsp)
 		location = shash.exact_hash[path]
 		if location then match_done = true end
 
-		-- postfix match
-		if not match_done then
-			if shash.postfix_hash_len > 0 then
-				local p = C.strrchr(path, 46)
-				if p ~= nil then
-					local postfix = ffi.string(p + 1)
-					location = shash.postfix_hash[postfix]
-					if location then match_done = true end
-				end
-			end
-		end
-
 		-- prefix match
 		if not match_done then
 			local start = find_first_less_equal(shash.prefix_size_hash, pathlen)
@@ -668,7 +656,7 @@ local function handle_http_request(req, rsp)
 				if modifier == "~" then
 					req.match_data = match_aux(strmatch(path, pat))
 				elseif modifier == "~*" then
-					req.match_data = match_aux(strmatch(lower(path), lower(pat)))
+					req.match_data = match_aux(strmatch(strlower(path), pat))
 				elseif modifier == "f"  then
 					local checker = coroutine.spawn(pat, nil, req)
 					req.match_data = match_aux(select(2, coroutine.wait(checker)))
