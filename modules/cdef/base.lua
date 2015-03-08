@@ -5,7 +5,9 @@ ffi.cdef[[
 typedef int ssize_t;
 typedef unsigned int mode_t;
 typedef int __pid_t;
+typedef long int __off_t;
 
+void *mmap(void *addr, size_t length, int prot, int flags, int fd, __off_t offset);
 extern ssize_t read(int fd, void *buf, size_t count);
 extern ssize_t write(int fd, const void *buf, size_t count);
 struct iovec {
@@ -111,7 +113,6 @@ int mount(const char *source, const char *target,
 int umount(const char *target);
 int chmod(const char *path, mode_t mode);
 
-typedef long int __off_t;
 struct flock
   {
     short int l_type;

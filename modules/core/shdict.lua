@@ -44,6 +44,7 @@ end
 
 local function init(cfg)
 	if cfg.lua_shared_dict then
+		local pool = C.mmap(nil, size, bor(C.PROT_READ,C.PROT_WRITE), bor(C.MAP_SHARED,C.MAP_ANON), -1, 0)
 		for k,v in pairs(cfg.lua_shared_dict) do
 			create_dict(k,v,cfg.uid,cfg.gid)
 		end
