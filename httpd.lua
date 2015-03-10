@@ -22,8 +22,8 @@ require("http") {
 	ssl_ciphers = "RC4:HIGH:!aNULL:!MD5",
 
 	lua_shared_dict = {
-		test = "10M",
-		my_locks = "100K"
+		test = "10m",
+		my_locks = "100k"
 	},
 
 	gzip = true,

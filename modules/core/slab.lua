@@ -1,13 +1,7 @@
 local ffi = require("ffi")
-ffi.cdef[[
-typedef long int __off_t;
-void *mmap(void *addr, size_t length, int prot, int flags, int fd, __off_t offset);
-static const int PROT_READ = 0x1;
-static const int PROT_WRITE = 0x2;
-static const int MAP_ANON = 0x20;
-static const int MAP_SHARED = 0x01;
-]]
-local C = ffi.C
+local C = require("cdef")
+
+local pthread = ffi.load("pthread")
 
 local bit = require("bit")
 local band = bit.band
@@ -21,9 +15,9 @@ local floor = math.floor
 local tonumber = tonumber
 
 ffi.cdef[[
-static const int minshift = 3;
-static const int maxshift = 11;
-static const int n_slots = maxshift - minshift + 1;
+static const int SLAB_MINSHIFT = 3;
+static const int SLAB_MAXSHIFT = 11;
+static const int SLAB_N_SLOTS = SLAB_MAXSHIFT - SLAB_MINSHIFT + 1;
 
 typedef struct slab_page_s slab_page_t;
 struct slab_page_s {
@@ -34,12 +28,13 @@ struct slab_page_s {
 
 typedef struct slab_pool_s slab_pool_t;
 struct slab_pool_s {
+	pthread_mutex_t mutex;
 	slab_page_t* pages;
 	slab_page_t free;
 	unsigned char* addr;
 	unsigned char* start;
 	unsigned char* endp;
-	slab_page_t slots[n_slots];
+	slab_page_t slots[SLAB_N_SLOTS];
 };
 ]]
 
@@ -50,8 +45,8 @@ local SLAB_BIG = 3
 local SLAB_TYPE_MASK = 3
 local SLAB_PTR_MASK = bnot(SLAB_TYPE_MASK)
 
-local MIN_SIZE = lshift(1, C.minshift)
-local MAX_SIZE = lshift(1, C.maxshift)
+local MIN_SIZE = lshift(1, C.SLAB_MINSHIFT)
+local MAX_SIZE = lshift(1, C.SLAB_MAXSHIFT)
 local EXACT_SIZE = lshift(1, 7)
 local PAGE_SIZE = 4096
 local PAGE_ALIGN = bnot(PAGE_SIZE - 1)
@@ -60,11 +55,18 @@ local slab_page_sz = ffi.sizeof("slab_page_t")
 local uintptr_sz = ffi.sizeof("uintptr_t")
 local uintptr_max = ffi.cast("uintptr_t", -1)
 
+local attr = ffi.new("pthread_mutexattr_t")
+assert(pthread.pthread_mutexattr_init(attr) == 0)
+assert(pthread.pthread_mutexattr_setpshared(attr, C.PTHREAD_PROCESS_SHARED) == 0)
+
 local function slab_pool_init(pool, size)
 	local addr = ffi.cast("unsigned char*", pool)
 	ffi.fill(addr, size)
 	pool = ffi.cast("slab_pool_t*", pool)
 	pool.addr = addr
+
+	assert(pthread.pthread_mutex_init(pool.mutex, attr) == 0)
+
 	size = band(size, PAGE_ALIGN)
 	pool.endp = ffi.cast("unsigned char*", addr + size)
 	pool.pages = ffi.cast("slab_page_t*", addr + slab_pool_sz)
@@ -88,9 +90,9 @@ local function slab_pool_init(pool, size)
 
 	tail.slab = n_pages
 
-	for i=0, C.n_slots-1 do
+	for i=0, C.SLAB_N_SLOTS-1 do
 		local slot = pool.slots[i]
-		slot.slab = lshift(1, C.minshift + i)
+		slot.slab = lshift(1, C.SLAB_MINSHIFT + i)
 		slot.prev = slot
 		slot.next = slot
 	end
@@ -197,7 +199,7 @@ local function slab_alloc(pool, size)
 		end
 	else
 		local slot
-		for i=0,C.n_slots-1 do
+		for i=0,C.SLAB_N_SLOTS-1 do
 			slot = pool.slots + i
 			if slot.slab >= size then
 				break
@@ -353,8 +355,8 @@ local function slab_free(pool, ptr)
 	end
 end
 
-local size = 1 * 1024 * 1024
-local addr = C.mmap(nil, size, bor(C.PROT_READ,C.PROT_WRITE), bor(C.MAP_SHARED,C.MAP_ANON), -1, 0)
-local pool = slab_pool_init(addr, size)
-local p = slab_alloc(pool, 34445)
-slab_free(pool, p)
+return {
+	pool_init = slab_pool_init,
+	alloc = slab_alloc,
+	free = slab_free,
+}

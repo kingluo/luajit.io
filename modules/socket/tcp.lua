@@ -1027,11 +1027,7 @@ local function run(cfg, parse_conf, overwrite_handler)
 		return -1, (worker_processes == 0)
 	end)
 	signal.init()
-	signal.add_signal_handler(C.SIGINT, function()
-		shdict.fini()
-	end)
 	epoll.run()
-	shdict.fini()
 	print "> parent exit"
 	os.exit(0)
 end

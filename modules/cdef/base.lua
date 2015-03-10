@@ -8,6 +8,7 @@ typedef int __pid_t;
 typedef long int __off_t;
 
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, __off_t offset);
+
 extern ssize_t read(int fd, void *buf, size_t count);
 extern ssize_t write(int fd, const void *buf, size_t count);
 struct iovec {
@@ -142,6 +143,11 @@ struct dirent {
    char           d_name[256]; /* filename */
 };
 struct dirent *readdir(void* dirp);
+
+static const int PROT_READ = 0x1;
+static const int PROT_WRITE = 0x2;
+static const int MAP_ANON = 0x20;
+static const int MAP_SHARED = 0x01;
 
 static const int F_SETLKW = 7;
 static const short int F_RDLCK         =0;

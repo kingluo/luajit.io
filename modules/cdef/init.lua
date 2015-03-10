@@ -6,5 +6,6 @@ require"cdef.socket"
 require"cdef.syslog"
 require"cdef.ssl"
 require"cdef.zlib"
+require"cdef.pthread"
 
 return require"ffi".C

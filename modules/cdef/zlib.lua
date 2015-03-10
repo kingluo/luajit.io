@@ -47,6 +47,8 @@ extern int deflateInit2_ (z_streamp strm, int level, int method,
 	int windowBits, int memLevel, int strategy, const char *version, int stream_size);
 extern int deflateEnd (z_streamp strm);
 extern int deflate (z_streamp strm, int flush);
+uLong crc32 (uLong crc, const Bytef *buf, uInt len);
+
 static const int Z_NO_FLUSH      =0;
 static const int Z_PARTIAL_FLUSH =1;
 static const int Z_SYNC_FLUSH    =2;
