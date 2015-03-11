@@ -5,6 +5,7 @@ local slab = require("core.slab")
 
 local pthread = ffi.load("pthread")
 local zlib = ffi.load("z")
+local rt = ffi.load("rt")
 
 local bor = bit.bor
 
@@ -33,7 +34,7 @@ struct shdict_kv_s {
 	shdict_kv_t* bnext;
 	shdict_kv_t* qprev;
 	shdict_kv_t* qnext;
-	struct itimerspec expire;
+	struct timespec expire;
 };
 
 typedef struct shdict_s shdict_t;
@@ -42,9 +43,12 @@ struct shdict_s {
 	unsigned long size;
 	unsigned long bsize;
 	shdict_kv_t** buckets;
-	shdict_kv_t* queue;
+	shdict_kv_t* qhead;
+	shdict_kv_t* qtail;
 };
 ]]
+
+local now = ffi.new("struct timespec")
 
 local attr = ffi.new("pthread_rwlockattr_t")
 assert(pthread.pthread_rwlockattr_init(attr) == 0)
@@ -60,14 +64,12 @@ local function create_dict(name, size)
 	assert(addr ~= -1)
 	local pool = slab.pool_init(addr, size)
 	local dict = ffi.cast("shdict_t*", slab.alloc(pool, ffi.sizeof("shdict_t")))
+	ffi.fill(dict, ffi.sizeof("shdict_t"))
 	assert(pthread.pthread_rwlock_init(dict.lock, attr) == 0)
-	dict.size = 0
 	dict.bsize = hsize_sel[1]
-	dict.buckets = ffi.cast("shdict_kv_t**", slab.alloc(pool, dict.bsize * ffi.sizeof("shdict_kv_t*")))
-	for i=0,dict.bsize-1 do
-		dict.buckets[i] = nil
-	end
-	dict.queue = nil
+	local buckets_sz = dict.bsize * ffi.sizeof("shdict_kv_t*")
+	dict.buckets = ffi.cast("shdict_kv_t**", slab.alloc(pool, buckets_sz))
+	ffi.fill(dict.buckets, buckets_sz)
 	dict_list[name] = setmetatable({dict=dict, pool=pool}, shdict_mt)
 end
 
@@ -144,59 +146,62 @@ local function rehash(self)
 	dict.bsize = newbsize
 end
 
-local function add_key(self, key)
+local function add_key(self, key, exptime)
 	rehash(self)
 	local kv = ffi.cast("shdict_kv_t*", slab.alloc(self.pool, ffi.sizeof("shdict_kv_t")))
+	ffi.fill(kv, ffi.sizeof("shdict_kv_t"))
+	if exptime and exptime > 0 then
+		rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, kv.expire)
+		kv.expire.tv_sec = kv.expire.tv_sec + math.floor(exptime)
+		kv.expire.tv_nsec = kv.expire.tv_nsec + (exptime%1) * 1000 * 1000 * 1000
+	end
 	kv.key = slab.alloc(self.pool, #key)
 	ffi.copy(kv.key, key, #key)
 	kv.ksize = #key
-	kv.value = nil
 	--#--
 	local dict = self.dict
 	local idx = key2bucket(dict, key)
 	local bucket = dict.buckets[idx]
 	dict.buckets[idx] = kv
-	kv.bnext = nil
-	kv.bprev = nil
 	if bucket ~= nil then
 		bucket.bprev = kv
 		kv.bnext = bucket
 	end
 	--#--
-	kv.qnext = nil
-	kv.qprev = nil
-	local queue = dict.queue
-	dict.queue = kv
-	if queue ~= nil then
-		queue.qprev = kv
-		kv.qnext = queue
+	if dict.qhead ~= nil then
+		dict.qhead.qprev = kv
+		kv.qnext = dict.qhead
+		dict.qhead = kv
+	else
+		dict.qhead = kv
+		dict.qtail = kv
 	end
 	--#--
 	dict.size = dict.size + 1
 	return kv
 end
 
-function _M.set(self, key, value)
+function _M.set(self, key, value, exptime)
 	local dict = self.dict
 	pthread.pthread_rwlock_wrlock(dict.lock)
 
 	local kv = find_key(dict, key)
 	if kv == nil then
-		kv = add_key(self, key)
+		kv = add_key(self, key, exptime)
 	end
-
 	write_value(self, kv, value)
+
 	pthread.pthread_rwlock_unlock(dict.lock)
 	return true
 end
 
-function _M.add(self, key, value)
+function _M.add(self, key, value, exptime)
 	local dict = self.dict
 	pthread.pthread_rwlock_wrlock(dict.lock)
 
 	local kv = find_key(dict, key)
 	if kv == nil then
-		kv = add_key(self, key)
+		kv = add_key(self, key, exptime)
 		write_value(self, kv, value)
 	end
 
@@ -204,11 +209,8 @@ function _M.add(self, key, value)
 	return true
 end
 
-function _M.delete(self, key)
+local function delete_ll(self, kv, key)
 	local dict = self.dict
-	pthread.pthread_rwlock_wrlock(dict.lock)
-
-	local kv = find_key(dict, key)
 	if kv ~= nil then
 		if kv.bprev == nil then
 			dict.buckets[key2bucket(dict, key)] = nil
@@ -219,13 +221,17 @@ function _M.delete(self, key)
 			kv.bnext.bprev = kv.bprev
 		end
 		--#--
-		if kv.qprev == nil then
-			dict.queue = nil
-		else
+		if kv.qprev ~= nil then
 			kv.qprev.qnext = kv.qnext
 		end
 		if kv.qnext ~= nil then
 			kv.qnext.qprev = kv.qprev
+		end
+		if dict.qhead == kv then
+			dict.qhead = nil
+		end
+		if dict.qtail == kv then
+			dict.qtail = nil
 		end
 		--#--
 		dict.size = dict.size - 1
@@ -233,9 +239,26 @@ function _M.delete(self, key)
 		slab.free(self.pool, kv.value)
 		slab.free(self.pool, kv)
 	end
+end
+
+function _M.delete(self, key)
+	local dict = self.dict
+	pthread.pthread_rwlock_wrlock(dict.lock)
+
+	delete_ll(self, find_key(dict, key), key)
 
 	pthread.pthread_rwlock_unlock(dict.lock)
 	return true
+end
+
+local function time_le(a,b)
+	if a.tv_sec <= b.tv_sec then
+		return true
+	end
+	if a.tv_sec == b.tv_sec and a.tv_nsec <= b.tv_nsec then
+		return true
+	end
+	return false
 end
 
 function _M.get(self, key)
@@ -245,11 +268,34 @@ function _M.get(self, key)
 
 	local kv = find_key(dict, key)
 	if kv ~= nil then
+		if kv.expire.tv_sec > 0 then
+			rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, now)
+			if time_le(kv, now) then
+				pthread.pthread_rwlock_unlock(dict.lock)
+				self:delete(key)
+				return nil, "expired"
+			end
+		end
 		value = ffi.string(kv.value, kv.vsize)
 		if kv.typ == C.SHDICT_V_BOOL then
 			value = (value == "true")
 		elseif kv.typ == C.SHDICT_V_NUMBER then
 			value = tonumber(value)
+		end
+	end
+
+	if dict.qhead ~= kv then
+		if kv.qprev ~= nil then
+			kv.qprev.qnext = kv.qnext
+		end
+		if kv.qnext ~= nil then
+			kv.qnext.qprev = kv.qprev
+		end
+		dict.qhead.qprev = kv
+		kv.qnext = dict.qhead
+		dict.qhead = kv
+		if dict.qtail == kv then
+			dict.qtail = kv.qprev
 		end
 	end
 
@@ -263,14 +309,14 @@ function _M.get_keys(self, max_count)
 	local t = {}
 	local dict = self.dict
 	pthread.pthread_rwlock_rdlock(dict.lock)
-	local kv = 	dict.queue
+	local kv = 	dict.qhead
 	while kv ~= nil do
 		tinsert(t, ffi.string(kv.key, kv.ksize))
 		if max_count then
 			max_count = max_count - 1
 			if max_count == 0 then break end
 		end
-		kv = kv.bnext
+		kv = kv.qnext
 	end
 	pthread.pthread_rwlock_unlock(dict.lock)
 	return unpack(t)
