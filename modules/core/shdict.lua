@@ -2,6 +2,7 @@ local C = require("cdef")
 local ffi = require("ffi")
 local bit = require("bit")
 local slab = require("core.slab")
+local add_timer = require("core.timer").add_timer
 
 local pthread = ffi.load("pthread")
 local zlib = ffi.load("z")
@@ -73,6 +74,73 @@ local function create_dict(name, size)
 	dict_list[name] = setmetatable({dict=dict, pool=pool}, shdict_mt)
 end
 
+local function key2bucket(dict, key, ksize)
+	return tonumber(zlib.crc32(0, ffi.cast("Bytef*", key), ksize or #key)) % dict.bsize
+end
+
+local function time_le(a,b)
+	if a.tv_sec <= b.tv_sec then
+		return true
+	end
+	if a.tv_sec == b.tv_sec and a.tv_nsec <= b.tv_nsec then
+		return true
+	end
+	return false
+end
+
+local function delete_ll(self, kv)
+	if kv ~= nil then
+		local dict = self.dict
+		local pool = self.pool
+		if kv.bprev == nil then
+			dict.buckets[key2bucket(dict, kv.key, kv.ksize)] = nil
+		else
+			kv.bprev.bnext = kv.bnext
+		end
+		if kv.bnext ~= nil then
+			kv.bnext.bprev = kv.bprev
+		end
+		--#--
+		if kv.qprev ~= nil then
+			kv.qprev.qnext = kv.qnext
+		end
+		if kv.qnext ~= nil then
+			kv.qnext.qprev = kv.qprev
+		end
+		if dict.qhead == kv then
+			dict.qhead = nil
+		end
+		if dict.qtail == kv then
+			dict.qtail = nil
+		end
+		--#--
+		dict.size = dict.size - 1
+		slab.free(pool, kv.key)
+		slab.free(pool, kv.value)
+		slab.free(pool, kv)
+	end
+end
+
+local function expire_handler()
+	rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, now)
+	for name,dict in pairs(dict_list) do
+		pthread.pthread_rwlock_wrlock(dict.dict.lock)
+		local kv = 	dict.dict.qtail
+		local count = 0
+		while kv ~= nil and count < 20 do
+			if kv.expire.tv_sec > 0 then
+				if time_le(kv, now) then
+					delete_ll(dict, kv)
+				end
+			end
+			kv = kv.qprev
+			count = count + 1
+		end
+		pthread.pthread_rwlock_unlock(dict.dict.lock)
+	end
+	add_timer(expire_handler, 0.1)
+end
+
 local function init(cfg)
 	if cfg.lua_shared_dict then
 		for name,size in pairs(cfg.lua_shared_dict) do
@@ -85,11 +153,8 @@ local function init(cfg)
 			end
 			create_dict(name, size)
 		end
+		-- add_timer(expire_handler, 0.1)
 	end
-end
-
-local function key2bucket(dict, key)
-	return tonumber(zlib.crc32(0, ffi.cast("Bytef*", key), #key)) % dict.bsize
 end
 
 local function find_key(dict, key)
@@ -209,56 +274,14 @@ function _M.add(self, key, value, exptime)
 	return true
 end
 
-local function delete_ll(self, kv, key)
-	local dict = self.dict
-	if kv ~= nil then
-		if kv.bprev == nil then
-			dict.buckets[key2bucket(dict, key)] = nil
-		else
-			kv.bprev.bnext = kv.bnext
-		end
-		if kv.bnext ~= nil then
-			kv.bnext.bprev = kv.bprev
-		end
-		--#--
-		if kv.qprev ~= nil then
-			kv.qprev.qnext = kv.qnext
-		end
-		if kv.qnext ~= nil then
-			kv.qnext.qprev = kv.qprev
-		end
-		if dict.qhead == kv then
-			dict.qhead = nil
-		end
-		if dict.qtail == kv then
-			dict.qtail = nil
-		end
-		--#--
-		dict.size = dict.size - 1
-		slab.free(self.pool, kv.key)
-		slab.free(self.pool, kv.value)
-		slab.free(self.pool, kv)
-	end
-end
-
 function _M.delete(self, key)
 	local dict = self.dict
 	pthread.pthread_rwlock_wrlock(dict.lock)
 
-	delete_ll(self, find_key(dict, key), key)
+	delete_ll(self, find_key(dict, key))
 
 	pthread.pthread_rwlock_unlock(dict.lock)
 	return true
-end
-
-local function time_le(a,b)
-	if a.tv_sec <= b.tv_sec then
-		return true
-	end
-	if a.tv_sec == b.tv_sec and a.tv_nsec <= b.tv_nsec then
-		return true
-	end
-	return false
 end
 
 function _M.get(self, key)

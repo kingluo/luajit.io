@@ -31,15 +31,15 @@ local function ssl_read(self, rbuf, size)
 			self:close()
 			err = "closed"
 		elseif sslerr == C.SSL_ERROR_WANT_READ then
-			self:yield(YIELD_R)
+			self:yield_r()
 		elseif sslerr == C.SSL_ERROR_WANT_WRITE then
 			epoll.add_event(self.ev, C.EPOLLOUT)
-			self:yield(YIELD_W)
+			self:yield_w()
 			epoll.del_event(self.ev, C.EPOLLOUT)
 		elseif sslerr == C.SSL_ERROR_SYSCALL then
 			local errno = ffi.errno()
 			if errno == C.EAGAIN then
-				self:yield(YIELD_R)
+				self:yield_r()
 			elseif errno ~= C.EINTR then
 				ssl.SSL_set_quiet_shutdown(self.ssl, 1)
 				self:close()
@@ -52,7 +52,7 @@ end
 
 local function ssl_write(self, iovec, idx, iovcnt)
 	create_ssl(self)
-	local buf = ffi.new("char[4096*4]")
+	local buf = ffi.new("char[4096*16]")
 	local len = 0
 	for i=0,iovcnt-1 do
 		local iovec = iovec[idx + i]
@@ -63,15 +63,15 @@ local function ssl_write(self, iovec, idx, iovcnt)
 	if len <= 0 then
 		local sslerr = ssl.SSL_get_error(self.ssl, len)
 		if sslerr == C.SSL_ERROR_WANT_READ then
-			self:yield(YIELD_R)
+			self:yield_r()
 		elseif sslerr == C.SSL_ERROR_WANT_WRITE then
 			epoll.add_event(self.ev, C.EPOLLOUT)
-			self:yield(YIELD_W)
+			self:yield_w()
 			epoll.del_event(self.ev, C.EPOLLOUT)
 		elseif sslerr == C.SSL_ERROR_SYSCALL then
 			local errno = ffi.errno()
 			if errno == C.EAGAIN then
-				self:yield(YIELD_W)
+				self:yield_w()
 			elseif errno ~= C.EINTR then
 				ssl.SSL_set_quiet_shutdown(self.ssl, 1)
 				self:close()
@@ -98,10 +98,10 @@ local function ssl_shutdown(self)
 			break
 		end
 		if sslerr == C.SSL_ERROR_WANT_READ then
-			self:yield(YIELD_R)
+			self:yield_r()
 		elseif sslerr == C.SSL_ERROR_WANT_WRITE then
 			epoll.add_event(self.ev, C.EPOLLOUT)
-			self:yield(YIELD_W)
+			self:yield_w()
 			epoll.del_event(self.ev, C.EPOLLOUT)
 		else
 			ssl.SSL_free(self.ssl)

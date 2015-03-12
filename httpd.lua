@@ -14,7 +14,7 @@ require("http") {
 	group = "nogroup",
 	daemon = false,
 	worker_processes = 1,
-	worker_connections = 2,
+	worker_connections = 100,
 
 	ssl = true,
 	ssl_certificate = "/opt/carbox/sslkey/server.crt",
@@ -32,6 +32,8 @@ require("http") {
 	gzip_types = {
 		["text/html"] = true,
 		["text/plain"] = true,
+		["application/javascript"] = true,
+		["text/css"] = true,
 	},
 
 	types = "mime.types",
@@ -55,7 +57,7 @@ require("http") {
 			--
 			-- {<modifier>, (<pattern> | <match function>), (<module> | <inline function>), ...}
 			--
-			{"=", "/", function(req, rsp) return rsp:exec("/test.luax") end},
+			{"=", "/", function(req, rsp) return rsp:exec("/index2.html") end},
 			{"=", "/hello", function(req, rsp) rsp:say("hello world!") end},
 			{"~*", "%.luax$", "http.luax", luax_prefix = "/WEB-INF/luax/"},
 			{"^~", "/foobar", "foo.bar.module"},

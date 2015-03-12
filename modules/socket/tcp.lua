@@ -52,7 +52,9 @@ local function sock_io_handler(ev, events)
 
 		-- no waiting coroutine
 		-- just unregister the event to avoid indefinite notify
-		epoll.del_event(ev)
+		if not ev.sock.closed then
+			epoll.del_event(ev)
+		end
 
 		-- if the sock resides in some pool,
 		-- then remove it from the pool and close it.
@@ -106,6 +108,14 @@ function tcp_mt.__index.yield(self, rw)
 	self[rw] = coroutine.running()
 	coroutine.yield()
 	self[rw] = nil
+end
+
+function tcp_mt.__index.yield_r(self)
+	return self:yield(YIELD_R)
+end
+
+function tcp_mt.__index.yield_w(self)
+	return self:yield(YIELD_W)
 end
 
 function tcp_mt.__index.close(self)
@@ -435,7 +445,6 @@ local function send_ll(self, ...)
 	-- do writev()
 	local iovec = self.iovec
 	local idx = 0
-	local gc = {}
 	local sent = 0
 	while true do
 		if self.wtimedout then
@@ -450,15 +459,13 @@ local function send_ll(self, ...)
 			sent = sent + len
 			if sent == bytes then return sent end
 			for i=idx,idx+iovcnt-1 do
-				if iovec[i].io_len <= len then
-					len = len - iovec[i].io_len
+				if iovec[i].iov_len <= len then
+					len = len - iovec[i].iov_len
 					idx = idx + 1
 					n_iovec = n_iovec - 1
 					if len == 0 then break end
 				else
-					local str = strsub(iovec[i].iov_base, len + 1)
-					tinsert(gc, str)
-					iovec[i].iov_base = ffi.cast("void*", str)
+					iovec[i].iov_base = ffi.cast("char*", iovec[i].iov_base) + len
 					iovec[i].iov_len = iovec[i].iov_len - len
 					break
 				end
@@ -622,6 +629,7 @@ function tcp_mt.__index.accept(self)
 	local cfd = C.accept(self.fd, ffi.cast("struct sockaddr *",addr), len)
 	if cfd <= 0 then return nil, utils.strerror() end
 
+	utils.set_nonblock(cfd)
 	local sock = tcp_new(cfd)
 	if self.linfo and self.linfo.ssl then
 		sock.hook.read = ssl.read
@@ -857,8 +865,6 @@ local function tcp_parse_conf(cfg)
 
 	if cfg.strict then require("core.strict") end
 
-	shdict.init(cfg)
-
 	ssl.init(cfg)
 
 	local srv_tbl = {}
@@ -1027,6 +1033,8 @@ local function run(cfg, parse_conf, overwrite_handler)
 		return -1, (worker_processes == 0)
 	end)
 	signal.init()
+	timer.init()
+	shdict.init(cfg)
 	epoll.run()
 	print "> parent exit"
 	os.exit(0)

@@ -99,19 +99,16 @@ function M.body_filter(rsp, ...)
 				local chunksz = (size > CHUNK) and CHUNK or size
 				local sz = C.read(fd, buf_in, chunksz)
 				size = size - sz
-				local ret,str = compress_chunk(gzip.strm, sz, flush)
+				local ret,str = compress_chunk(gzip.strm, sz, (size == 0) and flush or C.Z_NO_FLUSH)
 				if ret == C.Z_STREAM_END then
 					assert(buf.eof)
 					zlib.deflateEnd(gzip.strm)
 				end
-				local flush, eof
-				if sz < chunksz or size == 0 then
-					flush = buf.flush
-					eof = buf.eof
-				end
 				local buf2 = rsp.bufpool:get(str)
-				buf2.flush = flush
-				buf2.eof = eof
+				if sz < chunksz or size == 0 then
+					butf2.flush = buf.flush
+					butf2.eof = buf.eof
+				end
 				local ret,err = M.next_body_filter(rsp, buf2)
 				if err then return ret,err end
 				if sz < chunksz or size == 0 then break end
