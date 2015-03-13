@@ -23,7 +23,7 @@ require("http") {
 
 	lua_shared_dict = {
 		test = "10m",
-		my_locks = "100k"
+		my_locks = "100k",
 	},
 
 	gzip = true,
@@ -48,6 +48,7 @@ require("http") {
 		server_name = {"example.org", "*.example.com", "~my%d+web%.org"},
 		root = "/srv/myserver",
 		default_type = 'text/plain',
+		package_path = package.path .. ";/srv/myserver/WEB-INF/?.lua;/srv/myserver/WEB-INF/?/init.lua",
 		location = {
 			-- Refer to nginx location directive:
 			-- http://nginx.org/en/docs/http/ngx_http_core_module.html#location
@@ -57,10 +58,18 @@ require("http") {
 			--
 			-- {<modifier>, (<pattern> | <match function>), (<module> | <inline function>), ...}
 			--
-			{"=", "/", function(req, rsp) return rsp:exec("/index2.html") end},
+			{"=", "/", function(req, rsp) return rsp:exec("/index.html") end},
+			{"=", "/demo/tryredis", function(req, rsp) return rsp:exec("/demo.html") end},
+			{"=", "/demo/tryredis/exec", "demo.tryredis"},
+			{"=", "/demo/tryredis/source",
+				function(req, rsp)
+					rsp:say("```lua")
+					rsp:try_file("/WEB-INF/demo/tryredis.lua", false)
+					rsp:say("```")
+				end
+			},
 			{"=", "/hello", function(req, rsp) rsp:say("hello world!") end},
 			{"~*", "%.luax$", "http.luax", luax_prefix = "/WEB-INF/luax/"},
-			{"^~", "/foobar", "foo.bar.module"},
 			{"^~", "/WEB-INF/", function(req, rsp) return rsp:finalize(403) end},
 			{
 				"f",

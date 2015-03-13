@@ -206,6 +206,22 @@ end
 
 local http_rsp_mt = {__index = {bufpool = create_bufpool(100)}}
 
+local sid_pool = 1
+function http_rsp_mt.__index.get_sid(self)
+	if self.sid then return self.sid end
+    local cookie = self.req.headers["cookie"]
+	local sid
+	if cookie then
+		sid = string.match(cookie, "SESSIONID=([^;%s]+)")
+	else
+		sid = tostring(os.time()) .. sid_pool
+		sid_pool = sid_pool + 1
+		self.headers['Set-Cookie'] = 'SESSIONID=' .. sid .. '; path=/'
+	end
+	self.sid = sid
+    return sid
+end
+
 function http_rsp_mt.__index.send_headers(self)
 	return run_next_header_filter(self)
 end
@@ -346,10 +362,11 @@ function http_rsp_mt.__index.redirect(self, uri, status)
 	return coroutine.exit(true)
 end
 
-function http_rsp_mt.__index.try_file(self)
+function http_rsp_mt.__index.try_file(self, path, eof)
+	if eof == nil then eof = true end
 	local req = self.req
 	local lcf = req.lcf or req.srvcf
-	local path = req.url:path()
+	local path = path or req.url:path()
 	local ext = string.match(path, "%.([^%.]+)$")
 	self.headers["content-type"] = lcf:get_mime_types()[ext] or "application/octet-stream"
 	local fpath = (lcf.root or ".") .. '/' .. path
@@ -359,7 +376,7 @@ function http_rsp_mt.__index.try_file(self)
 	f:close()
 	self.headers["content-length"] = flen
 
-	local sent,err = self:sendfile(fpath, 0, flen, true)
+	local sent,err = self:sendfile(fpath, 0, flen, eof)
 	if err then
 		return self:finalize(404)
 	end
@@ -668,6 +685,10 @@ local function handle_http_request(req, rsp)
 	if location then
 		local fn = location[3]
 		if type(fn) == 'string' then
+			local lcf = req.lcf or req.srvcf
+			if lcf.package_path then
+				package.path = lcf.package_path
+			end
 			local ret
 			ret,fn = pcall(require, fn)
 			if ret == false then

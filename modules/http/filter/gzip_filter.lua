@@ -106,8 +106,8 @@ function M.body_filter(rsp, ...)
 				end
 				local buf2 = rsp.bufpool:get(str)
 				if sz < chunksz or size == 0 then
-					butf2.flush = buf.flush
-					butf2.eof = buf.eof
+					buf2.flush = buf.flush
+					buf2.eof = buf.eof
 				end
 				local ret,err = M.next_body_filter(rsp, buf2)
 				if err then return ret,err end
