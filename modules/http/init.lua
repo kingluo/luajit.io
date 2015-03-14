@@ -10,6 +10,7 @@ local run_next_header_filter = filter.run_next_header_filter
 local run_next_body_filter = filter.run_next_body_filter
 
 local create_bufpool = require("http.buf")
+local http_time = require("core.utils").http_time
 
 local strsub = string.sub
 local strfind = string.find
@@ -286,7 +287,8 @@ function http_rsp_mt.__index.finalize(self, status)
 	if status then self.status = status end
 	local buf = self.bufpool:get()
 	buf.eof = true
-	if not self.headers_sent and self.status ~= 200 then
+	if not self.headers_sent and self.status ~= 200
+		and self.status ~= 304 and self.status ~= 204 and self.status > 200 then
 		local str = special_rsp[self.status]
 		self.headers["content-type"] = "text/html"
 		self.headers["content-length"] = #str
@@ -296,7 +298,7 @@ function http_rsp_mt.__index.finalize(self, status)
 end
 
 function http_rsp_mt.__index.exit(self, status)
-	if not self.status then self.status = status end
+	if status then self.status = status end
 	return coroutine.exit(true)
 end
 
@@ -362,14 +364,47 @@ function http_rsp_mt.__index.redirect(self, uri, status)
 	return coroutine.exit(true)
 end
 
-function http_rsp_mt.__index.try_file(self, path, eof)
+local v_time_t = ffi.new("time_t[1]")
+local if_modified_tm = ffi.new("struct tm")
+local fstat = ffi.new("struct stat[1]")
+
+local function check_if_modified(rsp)
+	local req = rsp.req
+	local lcf = req.lcf or req.srvcf
+	local path = req.url:path()
+	path = (lcf.root or ".") .. '/' .. path
+	if C.syscall(C.SYS_stat, ffi.cast("const char*", path), fstat) == 0 then
+		local mtime = fstat[0].st_mtime
+		rsp.headers["expires"] = http_time(C.time(nil) + 5*60*60)
+		rsp.headers["cache-control"] = "public, max-age=" .. 5*60*60
+		rsp.headers["last-modified"] = http_time(mtime)
+		local str = rsp.req.headers["if-modified-since"]
+		if str then
+			C.strptime(str, "%a, %d %h %Y %H:%M:%S", if_modified_tm)
+			local rmtime = C.mktime(if_modified_tm)
+			v_time_t[0] = mtime
+			if rmtime >= C.mktime(C.gmtime(v_time_t)) then
+				return rsp:finalize(304)
+			end
+		end
+	end
+end
+
+function http_rsp_mt.__index.try_file(self, path, eof, absolute)
 	if eof == nil then eof = true end
 	local req = self.req
 	local lcf = req.lcf or req.srvcf
 	local path = path or req.url:path()
 	local ext = string.match(path, "%.([^%.]+)$")
-	self.headers["content-type"] = lcf:get_mime_types()[ext] or "application/octet-stream"
-	local fpath = (lcf.root or ".") .. '/' .. path
+	if self.headers["content-type"] == nil then
+		self.headers["content-type"] = lcf:get_mime_types()[ext] or "application/octet-stream"
+	end
+	local fpath
+	if absolute then
+		fpath = path
+	else
+		fpath = (lcf.root or ".") .. '/' .. path
+	end
 	local f = io.open(fpath)
 	if f == nil then return self:finalize(404) end
 	local flen = f:seek('end')
@@ -712,10 +747,13 @@ local function handle_http_request(req, rsp)
 		return rsp:finalize()
 	end
 
+	if check_if_modified(rsp) then return end
 	return rsp:try_file()
 end
 
+local nodelay = ffi.new("int[1]", 1)
 local function http_handler(sock)
+	assert(C.setsockopt(sock.fd, C.IPPROTO_TCP, C.TCP_NODELAY, ffi.cast("void*", nodelay), ffi.sizeof("int")) == 0)
 	while true do
 		local line,err = sock:receive()
 		if err then print(err); break end

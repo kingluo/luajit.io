@@ -1,5 +1,7 @@
-conf_path = string.match(arg[0], ".*/") or "./"
-package.path = package.path .. ";" .. conf_path .. "/modules/?.lua;" .. conf_path .. "/modules/?/init.lua"
+conf_file = arg[0]
+conf_path = string.match(conf_file, ".*/") or "./"
+package.path = package.path .. ";"
+	.. conf_path .. "/modules/?.lua;" .. conf_path .. "/modules/?/init.lua"
 
 require("http") {
 	-- toggle strict global env
@@ -42,27 +44,33 @@ require("http") {
 	-- Refer to http://nginx.org/en/docs/http/request_processing.html
 	{
 		listen = {
-			{port = 8080, default_server = true, ssl = true},
+			{address = "192.168.8.137", port = 80, default_server = true, ssl = false},
 			{address = "unix:/var/run/test.sock"}
 		},
-		server_name = {"example.org", "*.example.com", "~my%d+web%.org"},
+		server_name = {"luajit.io", "*.example.com", "~my%d+web%.org"},
 		root = "/srv/myserver",
 		default_type = 'text/plain',
-		package_path = package.path .. ";/srv/myserver/WEB-INF/?.lua;/srv/myserver/WEB-INF/?/init.lua",
+		package_path = package.path
+			.. ";/srv/myserver/WEB-INF/?.lua;/srv/myserver/WEB-INF/?/init.lua",
 		location = {
 			-- Refer to nginx location directive:
 			-- http://nginx.org/en/docs/http/ngx_http_core_module.html#location
 			-- Besides nginx modifiers, two new modifiers are added:
 			-- "^" explicitly indicates longest prefix matching
-			-- "f" matching function for arbitrary matching, with same priority as regexp matching
+			-- "f" function for arbitrary matching, with same priority as regexp matching
 			--
-			-- {<modifier>, (<pattern> | <match function>), (<module> | <inline function>), ...}
+			-- {<modifier>, (<pattern> | <function>), (<module> | <function>), ...}
 			--
 			{"=", "/", function(req, rsp) return rsp:exec("/index.html") end},
 			{"=", "/demo/tryredis", function(req, rsp) return rsp:exec("/demo.html") end},
 			{"=", "/demo/tryredis/exec", "demo.tryredis"},
 			{"=", "/demo/tryredis/source",
 				function(req, rsp)
+					rsp:say("### httpd.lua")
+					rsp:say("```lua")
+					rsp:try_file(conf_file, false, true)
+					rsp:say("```")
+					rsp:say("### tryredis.lua")
 					rsp:say("```lua")
 					rsp:try_file("/WEB-INF/demo/tryredis.lua", false)
 					rsp:say("```")
@@ -71,6 +79,17 @@ require("http") {
 			{"=", "/hello", function(req, rsp) rsp:say("hello world!") end},
 			{"~*", "%.luax$", "http.luax", luax_prefix = "/WEB-INF/luax/"},
 			{"^~", "/WEB-INF/", function(req, rsp) return rsp:finalize(403) end},
+		}
+	},
+	{
+		listen = {
+			{address = "127.0.0.1", port = 80, ssl = true},
+			{address = "127.0.0.1", port = 8080}
+		},
+		server_name = {"example.net"},
+		root = "/srv/foorbar",
+		default_type = 'text/plain',
+		location = {
 			{
 				"f",
 				function(req)
@@ -86,18 +105,6 @@ require("http") {
 					["application/json"] = true,
 				}
 			},
-		}
-	},
-	{
-		listen = {
-			{address = "127.0.0.1", port = 8080},
-			{address = "127.0.0.1", port = 10000}
-		},
-		server_name = {"example.net"},
-		root = "/srv/foorbar",
-		default_type = 'text/plain',
-		location = {
-			{"^~", "/static/", "static_mod"}
 		}
 	},
 }

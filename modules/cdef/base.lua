@@ -44,6 +44,7 @@ struct tm
   long int tm_gmtoff;
   __const char *tm_zone;
 };
+struct tm *gmtime(const time_t *timep);
 struct tm *gmtime_r(const time_t *timep, struct tm *result);
 size_t strftime(char *s, size_t max, const char *format, const struct tm *tm);
 
@@ -143,6 +144,31 @@ struct dirent {
    char           d_name[256]; /* filename */
 };
 struct dirent *readdir(void* dirp);
+
+struct stat {
+        unsigned long  st_dev;
+        unsigned long  st_ino;
+        unsigned short st_mode;
+        unsigned short st_nlink;
+        unsigned short st_uid;
+        unsigned short st_gid;
+        unsigned long  st_rdev;
+        unsigned long  st_size;
+        unsigned long  st_blksize;
+        unsigned long  st_blocks;
+        unsigned long  st_atime;
+        unsigned long  st_atime_nsec;
+        unsigned long  st_mtime;
+        unsigned long  st_mtime_nsec;
+        unsigned long  st_ctime;
+        unsigned long  st_ctime_nsec;
+        unsigned long  __unused4;
+        unsigned long  __unused5;
+};
+int syscall(int number, ...);
+char *strptime(const char *s, const char *format, struct tm *tm);
+time_t mktime(struct tm *tm);
+static const int SYS_stat = 106;
 
 static const int PROT_READ = 0x1;
 static const int PROT_WRITE = 0x2;

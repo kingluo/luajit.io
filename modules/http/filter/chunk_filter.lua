@@ -7,6 +7,11 @@ local eof = "0\r\n\r\n"
 local eol = "\r\n"
 
 function M.header_filter(rsp)
+	local status = rsp.status
+	if status == 304 or status == 204 or status < 200 or rsp.req.method == "HEAD" then
+		return M.next_header_filter(rsp)
+	end
+
 	if not rsp.headers["content-length"] then
 		rsp.headers["transfer-encoding"] = "chunked"
 		rsp.chunked = true

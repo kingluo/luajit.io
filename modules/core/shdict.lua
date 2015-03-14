@@ -138,7 +138,7 @@ local function expire_handler()
 		end
 		pthread.pthread_rwlock_unlock(dict.dict.lock)
 	end
-	add_timer(expire_handler, 0.1)
+	add_timer(expire_handler, 1)
 end
 
 local function init(cfg)
@@ -153,8 +153,11 @@ local function init(cfg)
 			end
 			create_dict(name, size)
 		end
-		-- add_timer(expire_handler, 0.1)
 	end
+end
+
+local function start_expire_timer()
+	-- add_timer(expire_handler, 1)
 end
 
 local function find_key(dict, key)
@@ -347,5 +350,6 @@ end
 
 return {
 	init = init,
+	start_expire_timer = start_expire_timer,
 	shared = dict_list
 }

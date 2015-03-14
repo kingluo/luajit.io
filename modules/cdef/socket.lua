@@ -116,6 +116,7 @@ static const int SO_REUSEADDR=2;
 static const int SO_ERROR = 4;
 static const int IPPROTO_TCP=6;
 static const int TCP_CORK = 3;
+static const int TCP_NODELAY = 1;
 ]]
 else
 error("arch not support: " .. ffi.arch)

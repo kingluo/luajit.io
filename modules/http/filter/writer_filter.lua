@@ -6,6 +6,7 @@ local M = {}
 local status_tbl = {
 	[200] = "HTTP/1.1 200 OK\r\n";
 	[302] = "HTTP/1.1 302 Found\r\n";
+	[304] = "HTTP/1.1 304 Not Modified\r\n";
 	[400] = "HTTP/1.1 400 Bad Request\r\n";
 	[403] = "HTTP/1.1 403 Forbidden\r\n";
 	[404] = "HTTP/1.1 404 Not Found\r\n";
@@ -26,14 +27,16 @@ function M.header_filter(rsp)
 	local ret,err = rsp.sock:send(status)
 	if err then return nil,err end
 
-	if rsp.headers["content-type"] == nil then
+	if rsp.status ~= 304 and rsp.headers["content-type"] == nil then
 		rsp.headers["content-type"] = lcf.default_type
 	end
 
 	rsp.headers["server"] = "luajit.io"
 
 	rsp.headers["date"] = http_time()
-	rsp.headers["cache-control"] = "no-cache, private"
+	if rsp.headers["cache-control"] == nil then
+		rsp.headers["cache-control"] = "no-cache, no-store, private, must-revalidation"
+	end
 	rsp.headers["connection"] = "Keep-Alive"
 
 	if rsp.req.headers["connection"] == "close" then

@@ -860,6 +860,8 @@ local function tcp_parse_conf(cfg)
 	if grp == NULL then error("invalid group: " .. cfg.group) end
 	cfg.gid = grp.gr_gid
 
+	shdict.init(cfg)
+
 	logging.init(cfg)
 	if cfg.log_import_print then logging.import_print() end
 
@@ -1034,7 +1036,7 @@ local function run(cfg, parse_conf, overwrite_handler)
 	end)
 	signal.init()
 	timer.init()
-	shdict.init(cfg)
+	shdict.start_expire_timer()
 	epoll.run()
 	print "> parent exit"
 	os.exit(0)
