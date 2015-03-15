@@ -1,5 +1,5 @@
-local timer = require("core.timer")
-local epoll = require("core.epoll")
+local timer = require("ljio.core.timer")
+local epoll = require("ljio.core.epoll")
 
 local add_timer = timer.add_timer
 local tinsert = table.insert

@@ -1,6 +1,6 @@
-local gzip = require("http.filter.gzip_filter")
-local chunk = require("http.filter.chunk_filter")
-local writer = require("http.filter.writer_filter")
+local gzip = require("ljio.http.filter.gzip_filter")
+local chunk = require("ljio.http.filter.chunk_filter")
+local writer = require("ljio.http.filter.writer_filter")
 
 gzip.next_header_filter = chunk.header_filter
 gzip.next_body_filter = chunk.body_filter

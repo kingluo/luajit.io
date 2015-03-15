@@ -1,6 +1,6 @@
 local ffi = require("ffi")
-local C = require("cdef")
-local epoll = require("core.epoll")
+local C = require("ljio.cdef")
+local epoll = require("ljio.core.epoll")
 
 local SIG_BLOCK = 0
 local SIG_UNBLOCK = 1

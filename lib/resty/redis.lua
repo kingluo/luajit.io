@@ -3,7 +3,7 @@
 
 local sub = string.sub
 local byte = string.byte
-local tcp = require"socket.tcp"
+local tcp = require"ljio.socket.tcp"
 local concat = table.concat
 local ffi = require"ffi"
 local null = ffi.new("void*")

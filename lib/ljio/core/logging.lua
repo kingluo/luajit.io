@@ -1,4 +1,4 @@
-local C = require("cdef")
+local C = require("ljio.cdef")
 local bit = require("bit")
 
 local tconcat = table.concat

@@ -1,16 +1,16 @@
-local C = require("cdef")
+local C = require("ljio.cdef")
 local ffi = require("ffi")
-local tcp = require("socket.tcp")
+local tcp = require("ljio.socket.tcp")
 local URI = require("uri")
 local uri_encode = require("uri._util").uri_encode
 local uri_decode = require("uri._util").uri_decode
 
-local filter = require("http.filter")
+local filter = require("ljio.http.filter")
 local run_next_header_filter = filter.run_next_header_filter
 local run_next_body_filter = filter.run_next_body_filter
 
-local create_bufpool = require("http.buf")
-local http_time = require("core.utils").http_time
+local create_bufpool = require("ljio.http.buf")
+local http_time = require("ljio.core.utils").http_time
 
 local strsub = string.sub
 local strfind = string.find
@@ -718,15 +718,17 @@ local function handle_http_request(req, rsp)
 	req.lcf = location
 
 	if location then
+		local lcf = req.lcf or req.srvcf
+		if lcf.package_path then
+			package.path = lcf.package_path
+		end
+
 		local fn = location[3]
 		if type(fn) == 'string' then
-			local lcf = req.lcf or req.srvcf
-			if lcf.package_path then
-				package.path = lcf.package_path
-			end
 			local ret
 			ret,fn = pcall(require, fn)
 			if ret == false then
+			print(fn)
 				return rsp:finalize(500)
 			end
 		end

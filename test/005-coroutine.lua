@@ -1,4 +1,4 @@
-local dns = require("socket.dns")
+local dns = require("ljio.socket.dns")
 
 local function test_coroutine(req, rsp)
 	local co1 = coroutine.spawn(

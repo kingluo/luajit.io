@@ -1,16 +1,16 @@
-local C = require("cdef")
+local C = require("ljio.cdef")
 local ffi = require("ffi")
-local epoll = require("core.epoll")
-local timer = require("core.timer")
-require("core.coroutine")
-local utils = require("core.utils")
-local signal = require("core.signal")
-local dfa_compile = require("core.dfa").compile
-local logging = require("core.logging")
-local shdict = require("core.shdict")
+local epoll = require("ljio.core.epoll")
+local timer = require("ljio.core.timer")
+require("ljio.core.coroutine")
+local utils = require("ljio.core.utils")
+local signal = require("ljio.core.signal")
+local dfa_compile = require("ljio.core.dfa").compile
+local logging = require("ljio.core.logging")
+local shdict = require("ljio.core.shdict")
 
-local dns = require("socket.dns")
-local ssl = require("socket.ssl")
+local dns = require("ljio.socket.dns")
+local ssl = require("ljio.socket.ssl")
 
 local strfind = string.find
 local strsub = string.sub
@@ -865,7 +865,7 @@ local function tcp_parse_conf(cfg)
 	logging.init(cfg)
 	if cfg.log_import_print then logging.import_print() end
 
-	if cfg.strict then require("core.strict") end
+	if cfg.strict then require("ljio.core.strict") end
 
 	ssl.init(cfg)
 

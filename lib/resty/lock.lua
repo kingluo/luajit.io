@@ -3,7 +3,7 @@
 
 local ffi = require "ffi"
 local ffi_new = ffi.new
-local shared = require("core.shdict").shared
+local shared = require("ljio.core.shdict").shared
 local sleep = coroutine.sleep
 local shdict_mt
 local debug = false

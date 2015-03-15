@@ -1,6 +1,6 @@
 local ffi = require("ffi")
-local C = require("cdef")
-local utils = require("core.utils")
+local C = require("ljio.cdef")
+local utils = require("ljio.core.utils")
 
 local cryto = ffi.load("crypto")
 local ssl = ffi.load("ssl")

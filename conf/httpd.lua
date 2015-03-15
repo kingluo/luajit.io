@@ -1,9 +1,9 @@
 conf_file = arg[0]
 conf_path = string.match(conf_file, ".*/") or "./"
 package.path = package.path .. ";"
-	.. conf_path .. "/modules/?.lua;" .. conf_path .. "/modules/?/init.lua"
+	.. conf_path .. "../lib/?.lua;" .. conf_path .. "../lib/?/init.lua"
 
-require("http") {
+require("ljio.http") {
 	-- toggle strict global env
 	strict = true,
 
@@ -44,10 +44,9 @@ require("http") {
 	-- Refer to http://nginx.org/en/docs/http/request_processing.html
 	{
 		listen = {
-			{address = "192.168.8.137", port = 80, default_server = true, ssl = false},
-			{address = "unix:/var/run/test.sock"}
+			{port = 80, default_server = true},
 		},
-		server_name = {"luajit.io", "*.example.com", "~my%d+web%.org"},
+		server_name = {"luajit.io"},
 		root = "/srv/myserver",
 		default_type = 'text/plain',
 		package_path = package.path
@@ -62,22 +61,25 @@ require("http") {
 			-- {<modifier>, (<pattern> | <function>), (<module> | <function>), ...}
 			--
 			{"=", "/", function(req, rsp) return rsp:exec("/index.html") end},
-			{"=", "/demo/tryredis", function(req, rsp) return rsp:exec("/demo.html") end},
 			{"=", "/demo/tryredis/exec", "ljio.demo.tryredis"},
-			{"=", "/hello", function(req, rsp) rsp:say("hello world!") end},
-			{"~*", "%.luax$", "http.luax", luax_prefix = "/WEB-INF/luax/"},
+			{"~*", "%.luax$", "ljio.http.luax", luax_prefix = "/WEB-INF/luax/"},
 			{"^~", "/WEB-INF/", function(req, rsp) return rsp:finalize(403) end},
 		}
 	},
 	{
 		listen = {
-			{address = "127.0.0.1", port = 80, ssl = true},
-			{address = "127.0.0.1", port = 8080}
+			{address = "127.0.0.1", port = 80},
+			{address = "127.0.0.1", port = 443, ssl = true},
+			{address = "unix:/var/run/test.sock"},
 		},
-		server_name = {"example.net"},
-		root = "/srv/foorbar",
+		server_name = {"example.net", "*.example.com", "~my%d+web%.org"},
+		root = "/srv/foobar",
+		package_path = package.path
+			.. ";" .. conf_path .. "../test/?.lua"
+			.. ";" .. conf_path .. "../test/?/init.lua",
 		default_type = 'text/plain',
 		location = {
+			{"=", "/hello", function(req, rsp) rsp:say("hello world!") end},
 			{
 				"f",
 				function(req)
@@ -86,7 +88,7 @@ require("http") {
 					end
 				end,
 				function(req, rsp)
-					local test = "test." .. string.gsub(req.match_data[1], "/", ".")
+					local test = string.gsub(req.match_data[1], "/", ".")
 					return require(test)(req, rsp)
 				end,
 				gzip_types = {

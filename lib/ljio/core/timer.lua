@@ -1,8 +1,8 @@
 local ffi = require("ffi")
-local C = require("cdef")
+local C = require("ljio.cdef")
 local rt = ffi.load("rt")
-local epoll = require("core.epoll")
-local rbtree = require("core.rbtree")
+local epoll = require("ljio.core.epoll")
+local rbtree = require("ljio.core.rbtree")
 
 local g_timer_fd
 local g_timer_ev = {}

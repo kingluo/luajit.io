@@ -1,5 +1,5 @@
 local ffi = require("ffi")
-local C = require("cdef")
+local C = require("ljio.cdef")
 local bit = require("bit")
 
 local g_epoll_fd

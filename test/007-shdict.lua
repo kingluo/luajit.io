@@ -1,6 +1,6 @@
 
 local function test(req, rsp)
-	local test = require("core.shdict").shared.test
+	local test = require("ljio.core.shdict").shared.test
 	test:set("foo","bar")
 	rsp:say(test:get("foo"))
 	test:set("foo",98767)

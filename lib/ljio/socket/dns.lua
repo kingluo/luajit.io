@@ -1,7 +1,7 @@
 local ffi = require("ffi")
-local C = require("cdef")
-require("core.coroutine")
-local signal = require("core.signal")
+local C = require("ljio.cdef")
+require("ljio.core.coroutine")
+local signal = require("ljio.core.signal")
 
 local requests = {}
 local handler_registered = false

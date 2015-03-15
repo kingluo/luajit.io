@@ -1,6 +1,6 @@
 local M = {}
 
-local C = require("cdef")
+local C = require("ljio.cdef")
 local ffi = require("ffi")
 local zlib = ffi.load("z")
 

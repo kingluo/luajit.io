@@ -1,4 +1,4 @@
-local http_time = require("core.utils").http_time
+local http_time = require("ljio.core.utils").http_time
 local tinsert = table.insert
 
 local M = {}

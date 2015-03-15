@@ -1,8 +1,8 @@
-local C = require("cdef")
+local C = require("ljio.cdef")
 local ffi = require("ffi")
 local bit = require("bit")
-local slab = require("core.slab")
-local add_timer = require("core.timer").add_timer
+local slab = require("ljio.core.slab")
+local add_timer = require("ljio.core.timer").add_timer
 
 local pthread = ffi.load("pthread")
 local zlib = ffi.load("z")
