@@ -259,7 +259,7 @@ local special_rsp_template = [[
 <head><title>$status</title></head>
 <body bgcolor="white">
 <center><h1>$status</h1></center>
-<hr><center>nginx</center>
+<hr><center>luajit.io</center>
 </body>
 </html>
 ]]

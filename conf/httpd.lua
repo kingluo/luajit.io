@@ -52,8 +52,7 @@ require("ljio.http") {
 		package_path = package.path
 			.. ";/srv/myserver/WEB-INF/lib/?.lua;/srv/myserver/WEB-INF/lib/?/init.lua",
 		location = {
-			-- Refer to nginx location directive:
-			-- http://nginx.org/en/docs/http/ngx_http_core_module.html#location
+			-- Refer to http://nginx.org/en/docs/http/ngx_http_core_module.html#location
 			-- Besides nginx modifiers, two new modifiers are added:
 			-- "^" explicitly indicates longest prefix matching
 			-- "f" function for arbitrary matching, with same priority as regexp matching
