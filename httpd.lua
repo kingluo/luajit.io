@@ -51,7 +51,7 @@ require("http") {
 		root = "/srv/myserver",
 		default_type = 'text/plain',
 		package_path = package.path
-			.. ";/srv/myserver/WEB-INF/?.lua;/srv/myserver/WEB-INF/?/init.lua",
+			.. ";/srv/myserver/WEB-INF/lib/?.lua;/srv/myserver/WEB-INF/lib/?/init.lua",
 		location = {
 			-- Refer to nginx location directive:
 			-- http://nginx.org/en/docs/http/ngx_http_core_module.html#location
@@ -63,19 +63,7 @@ require("http") {
 			--
 			{"=", "/", function(req, rsp) return rsp:exec("/index.html") end},
 			{"=", "/demo/tryredis", function(req, rsp) return rsp:exec("/demo.html") end},
-			{"=", "/demo/tryredis/exec", "demo.tryredis"},
-			{"=", "/demo/tryredis/source",
-				function(req, rsp)
-					rsp:say("### httpd.lua")
-					rsp:say("```lua")
-					rsp:try_file(conf_file, false, true)
-					rsp:say("```")
-					rsp:say("### tryredis.lua")
-					rsp:say("```lua")
-					rsp:try_file("/WEB-INF/demo/tryredis.lua", false)
-					rsp:say("```")
-				end
-			},
+			{"=", "/demo/tryredis/exec", "ljio.demo.tryredis"},
 			{"=", "/hello", function(req, rsp) rsp:say("hello world!") end},
 			{"~*", "%.luax$", "http.luax", luax_prefix = "/WEB-INF/luax/"},
 			{"^~", "/WEB-INF/", function(req, rsp) return rsp:finalize(403) end},
