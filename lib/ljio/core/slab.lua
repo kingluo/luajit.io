@@ -1,3 +1,5 @@
+-- Copyright (C) Jinhua Luo
+
 local ffi = require("ffi")
 local C = require("ljio.cdef")
 
@@ -12,7 +14,6 @@ local rshift = bit.rshift
 
 local ceil = math.ceil
 local floor = math.floor
-local tonumber = tonumber
 
 ffi.cdef[[
 static const int SLAB_MINSHIFT = 3;
@@ -21,7 +22,7 @@ static const int SLAB_N_SLOTS = SLAB_MAXSHIFT - SLAB_MINSHIFT + 1;
 
 typedef struct slab_page_s slab_page_t;
 struct slab_page_s {
-	uintptr_t slab;
+	uint32_t slab;
 	slab_page_t* next;
 	slab_page_t* prev;
 };
@@ -61,7 +62,7 @@ assert(pthread.pthread_mutexattr_setpshared(attr, C.PTHREAD_PROCESS_SHARED) == 0
 
 local function slab_pool_init(pool, size)
 	local addr = ffi.cast("unsigned char*", pool)
-	ffi.fill(addr, size)
+	C.memset(addr, 0, size)
 	pool = ffi.cast("slab_pool_t*", pool)
 	pool.addr = addr
 
@@ -72,8 +73,8 @@ local function slab_pool_init(pool, size)
 	pool.pages = ffi.cast("slab_page_t*", addr + slab_pool_sz)
 
 	local n_pages = floor((size - slab_pool_sz) / (PAGE_SIZE + slab_page_sz))
-	local s = ffi.cast("uintptr_t", band(tonumber(ffi.cast("uintptr_t",
-		addr + slab_pool_sz + n_pages * slab_page_sz + PAGE_SIZE - 1)), PAGE_ALIGN))
+	addr = ffi.cast("uintptr_t", addr + slab_pool_sz + n_pages * slab_page_sz + PAGE_SIZE - 1)
+	local s = ffi.cast("uintptr_t", addr / PAGE_SIZE * PAGE_SIZE)
 	pool.start = ffi.cast("unsigned char*", s)
 	assert(n_pages == (pool.endp - pool.start) / PAGE_SIZE)
 
@@ -138,7 +139,7 @@ local function free_pages(pool, n_page)
 	local page = pool.pages + n_page
 	if n_page + page.slab < pool.free.slab then
 		local page2 = page + page.slab
-		if page2.next ~= nil and band(tonumber(ffi.cast("uintptr_t", page2.prev)), SLAB_TYPE_MASK) == SLAB_PAGE then
+		if page2.next ~= nil and ffi.cast("uintptr_t", page2.prev) % 4 == SLAB_PAGE then
 			page.slab = page.slab + page2.slab
 			page.prev = page2.prev
 			page2.prev.next = page
@@ -168,7 +169,7 @@ local function free_pages(pool, n_page)
 		if page1.slab > 1 then
 			page1 = page1 - page1.slab + 1
 		end
-		if page1.next ~= nil and band(ffi.cast("uintptr_t", tonumber(page1.prev)), SLAB_TYPE_MASK) == SLAB_PAGE then
+		if page1.next ~= nil and ffi.cast("uintptr_t", page1.prev) % 4 == SLAB_PAGE then
 			page1.next.prev = page1.prev
 			page1.prev.next = page1.next
 			--#--
@@ -226,7 +227,7 @@ local function slab_alloc(pool, size)
 			slot.next.prev = page
 			page.next = slot.next
 			slot.next = page
-			page.prev = ffi.cast("slab_page_t*", ffi.cast("uintptr_t", bor(tonumber(ffi.cast("uintptr_t", slot)), typ)))
+			page.prev = ffi.cast("slab_page_t*", ffi.cast("uintptr_t", slot) + typ)
 			if typ == SLAB_SMALL then
 				page.slab = slot.slab
 				local bitmap = pool.start + (page - pool.pages) * PAGE_SIZE
@@ -237,10 +238,6 @@ local function slab_alloc(pool, size)
 				local meta_slabs = ceil(n_bytes / slot.slab)
 				assert(floor(meta_slabs / 8) <= 1)
 				bitmap[0] = lshift(1, meta_slabs) - 1
-			-- elseif typ == SLAB_BIG then
-				-- local meta_slabs = ceil(PAGE_SIZE / slot.slab)
-				-- page.slab = ffi.cast("uintptr_t", bor(0, bnot(lshift(1, meta_slabs) - 1)))
-				-- print(page.slab)
 			else
 				page.slab = 0
 			end
@@ -273,7 +270,7 @@ local function slab_alloc(pool, size)
 			end
 		else
 			local n_bits = PAGE_SIZE / slot.slab
-			local slab = tonumber(page.slab)
+			local slab = page.slab
 			for i=0, n_bits - 1 do
 				local b = lshift(1, i)
 				if band(slab, b) == 0 then
@@ -301,12 +298,12 @@ local function slab_free(pool, ptr)
 	ptr = ffi.cast("unsigned char*", ptr)
 	local n_page = floor((ptr - pool.start) / PAGE_SIZE)
 	local page = pool.pages[n_page]
-	local typ = band(tonumber(ffi.cast("uintptr_t", page.prev)), SLAB_TYPE_MASK)
+	local typ = ffi.cast("uintptr_t", page.prev) % 4
 	if typ == SLAB_PAGE then
 		return free_pages(pool, n_page)
 	end
 
-	local slot = ffi.cast("uintptr_t", band(tonumber(ffi.cast("uintptr_t", page.prev)), SLAB_PTR_MASK))
+	local slot = ffi.cast("uintptr_t", page.prev) / 4 * 4
 	slot = ffi.cast("slab_page_t*", slot)
 	if page.next == nil then
 		slot.next.prev = page
@@ -345,7 +342,7 @@ local function slab_free(pool, ptr)
 		local n_bit = delta / slot.slab
 		local b = lshift(1, n_bit)
 		assert(band(page.slab, b) ~= 0)
-		page.slab = ffi.cast("uintptr_t", band(page.slab, bnot(b)))
+		page.slab = band(page.slab, bnot(b))
 		if page.slab == 0 then
 			page.prev.next = page.next
 			page.next.prev = page.prev

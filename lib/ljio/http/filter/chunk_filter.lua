@@ -1,3 +1,5 @@
+-- Copyright (C) Jinhua Luo
+
 local M = {}
 
 local tinsert = table.insert

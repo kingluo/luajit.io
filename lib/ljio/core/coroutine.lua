@@ -1,3 +1,5 @@
+-- Copyright (C) Jinhua Luo
+
 local timer = require("ljio.core.timer")
 local epoll = require("ljio.core.epoll")
 

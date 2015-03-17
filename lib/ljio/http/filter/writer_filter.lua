@@ -1,3 +1,5 @@
+-- Copyright (C) Jinhua Luo
+
 local http_time = require("ljio.core.utils").http_time
 local tinsert = table.insert
 

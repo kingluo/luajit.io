@@ -1,3 +1,5 @@
+-- Copyright (C) Jinhua Luo
+
 local function calc_size(v)
 	local size = 0
 	local typ = type(v)

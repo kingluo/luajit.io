@@ -1,3 +1,5 @@
+-- Copyright (C) Jinhua Luo
+
 local strfind = string.find
 local format = string.format
 local strsub = string.sub

@@ -1,3 +1,5 @@
+-- Copyright (C) Jinhua Luo
+
 local C = require("ljio.cdef")
 local ffi = require("ffi")
 local bit = require("bit")
@@ -65,12 +67,12 @@ local function create_dict(name, size)
 	assert(addr ~= -1)
 	local pool = slab.pool_init(addr, size)
 	local dict = ffi.cast("shdict_t*", slab.alloc(pool, ffi.sizeof("shdict_t")))
-	ffi.fill(dict, ffi.sizeof("shdict_t"))
+	C.memset(dict, 0, ffi.sizeof("shdict_t"))
 	assert(pthread.pthread_rwlock_init(dict.lock, attr) == 0)
 	dict.bsize = hsize_sel[1]
 	local buckets_sz = dict.bsize * ffi.sizeof("shdict_kv_t*")
 	dict.buckets = ffi.cast("shdict_kv_t**", slab.alloc(pool, buckets_sz))
-	ffi.fill(dict.buckets, buckets_sz)
+	C.memset(dict.buckets, 0, buckets_sz)
 	dict_list[name] = setmetatable({dict=dict, pool=pool}, shdict_mt)
 end
 
@@ -217,7 +219,7 @@ end
 local function add_key(self, key, exptime)
 	rehash(self)
 	local kv = ffi.cast("shdict_kv_t*", slab.alloc(self.pool, ffi.sizeof("shdict_kv_t")))
-	ffi.fill(kv, ffi.sizeof("shdict_kv_t"))
+	C.memset(kv, 0, ffi.sizeof("shdict_kv_t"))
 	if exptime and exptime > 0 then
 		rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, kv.expire)
 		kv.expire.tv_sec = kv.expire.tv_sec + math.floor(exptime)

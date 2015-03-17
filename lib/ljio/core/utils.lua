@@ -1,3 +1,5 @@
+-- Copyright (C) Jinhua Luo
+
 local C = require("ljio.cdef")
 local ffi = require("ffi")
 local bit = require("bit")

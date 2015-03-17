@@ -1,3 +1,5 @@
+-- Copyright (C) Jinhua Luo
+
 local ffi = require("ffi")
 local C = require("ljio.cdef")
 require("ljio.core.coroutine")

@@ -1,3 +1,5 @@
+-- Copyright (C) Jinhua Luo
+
 local M = {}
 
 local C = require("ljio.cdef")

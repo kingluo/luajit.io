@@ -1,3 +1,5 @@
+-- Copyright (C) Jinhua Luo
+
 local RED = 1
 local BLACK = 0
 

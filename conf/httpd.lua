@@ -19,8 +19,8 @@ require("ljio.http") {
 	worker_connections = 100,
 
 	ssl = true,
-	ssl_certificate = "/opt/carbox/sslkey/server.crt",
-	ssl_certificate_key = "/opt/carbox/sslkey/server.key",
+	ssl_certificate = "/opt/sslkey/server.crt",
+	ssl_certificate_key = "/opt/sslkey/server.key",
 	ssl_ciphers = "RC4:HIGH:!aNULL:!MD5",
 
 	lua_shared_dict = {

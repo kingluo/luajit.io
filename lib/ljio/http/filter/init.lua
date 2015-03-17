@@ -1,3 +1,5 @@
+-- Copyright (C) Jinhua Luo
+
 local gzip = require("ljio.http.filter.gzip_filter")
 local chunk = require("ljio.http.filter.chunk_filter")
 local writer = require("ljio.http.filter.writer_filter")
