@@ -43,10 +43,7 @@ local SLAB_PAGE = 0
 local SLAB_SMALL = 1
 local SLAB_EXACT = 2
 local SLAB_BIG = 3
-local SLAB_TYPE_MASK = 3
-local SLAB_PTR_MASK = bnot(SLAB_TYPE_MASK)
 
-local MIN_SIZE = lshift(1, C.SLAB_MINSHIFT)
 local MAX_SIZE = lshift(1, C.SLAB_MAXSHIFT)
 local EXACT_SIZE = lshift(1, 7)
 local PAGE_SIZE = 4096
