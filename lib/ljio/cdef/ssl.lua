@@ -1,6 +1,5 @@
 local ffi = require("ffi")
 
-if ffi.arch == "x86" then
 ffi.cdef[[
 void OPENSSL_config(const char *config_name);
 void OPENSSL_add_all_algorithms_noconf(void);
@@ -33,12 +32,8 @@ static const int SSL_ERROR_WANT_READ = 2;
 static const int SSL_ERROR_WANT_WRITE = 3;
 static const int SSL_ERROR_SYSCALL = 5;
 static const int SSL_ERROR_ZERO_RETURN = 6;
-static const long SSL_OP_NO_COMPRESSION = 0x00020000L;
-static const long SSL_MODE_RELEASE_BUFFERS = 0x00000010L;
+static const int SSL_OP_NO_COMPRESSION = 0x00020000;
+static const int SSL_MODE_RELEASE_BUFFERS = 0x00000010;
 static const int SSL_CTRL_OPTIONS = 32;
 static const int SSL_CTRL_MODE = 33;
-
 ]]
-else
-error("arch not support: " .. ffi.arch)
-end

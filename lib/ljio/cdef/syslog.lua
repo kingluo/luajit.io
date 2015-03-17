@@ -1,6 +1,5 @@
 local ffi = require("ffi")
 
-if ffi.arch == "x86" then
 ffi.cdef[[
 void openlog(const char *ident, int option, int facility);
 void syslog(int priority, const char *format, ...);
@@ -35,6 +34,3 @@ static const int LOG_NOTICE      = 5;       /* normal but significant condition 
 static const int LOG_INFO        = 6;       /* informational */
 static const int LOG_DEBUG       = 7;       /* debug-level messages */
 ]]
-else
-error("arch not support: " .. ffi.arch)
-end

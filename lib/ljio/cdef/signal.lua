@@ -1,6 +1,5 @@
 local ffi = require("ffi")
 
-if ffi.arch == "x86" then
 ffi.cdef[[
 typedef struct
   {
@@ -34,17 +33,13 @@ int sigaddset(sigset_t *set, int signum);
 int sigdelset(sigset_t *set, int signum);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 
-typedef void (*__sighandler_t) (int);
-typedef __sighandler_t sighandler_t;
-sighandler_t signal(int signum, sighandler_t handler);
+typedef void (*sighandler_t) (int);
+sighandler_t signal (int __sig, sighandler_t __handler);
 
 static const int32_t SI_ASYNCNL = -60;
 
 static const int SIGINT = 2;
-static const int SIGCHLD=17;
-static const int SIGPIPE=13;
+static const int SIGCHLD = 17;
+static const int SIGPIPE = 13;
 static const int SIGIO = 29;
 ]]
-else
-error("arch not support: " .. ffi.arch)
-end

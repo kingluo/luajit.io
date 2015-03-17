@@ -2,12 +2,6 @@ local ffi = require("ffi")
 
 if ffi.arch == "x86" then
 ffi.cdef[[
-typedef union
-{
-  char __size[4];
-  long int __align;
-} pthread_mutexattr_t;
-
 typedef struct __pthread_internal_slist
 {
   struct __pthread_internal_slist *__next;
@@ -55,6 +49,67 @@ typedef union
   char __size[32];
   long int __align;
 } pthread_rwlock_t;
+]]
+elseif ffi.arch == "x64" then
+ffi.cdef[[
+typedef struct __pthread_internal_list
+{
+  struct __pthread_internal_list *__prev;
+  struct __pthread_internal_list *__next;
+} __pthread_list_t;
+
+typedef union
+{
+  struct __pthread_mutex_s
+  {
+    int __lock;
+    unsigned int __count;
+    int __owner;
+
+    unsigned int __nusers;
+
+
+
+    int __kind;
+
+    int __spins;
+    __pthread_list_t __list;
+  } __data;
+  char __size[40];
+  long int __align;
+} pthread_mutex_t;
+
+typedef union
+{
+
+  struct
+  {
+    int __lock;
+    unsigned int __nr_readers;
+    unsigned int __readers_wakeup;
+    unsigned int __writer_wakeup;
+    unsigned int __nr_readers_queued;
+    unsigned int __nr_writers_queued;
+    int __writer;
+    int __shared;
+    unsigned long int __pad1;
+    unsigned long int __pad2;
+
+
+    unsigned int __flags;
+  } __data;
+  char __size[56];
+  long int __align;
+} pthread_rwlock_t;
+]]
+end
+
+ffi.cdef[[
+typedef union
+{
+  char __size[4];
+  long int __align;
+} pthread_mutexattr_t;
 
 typedef union
 {
@@ -84,6 +139,3 @@ extern int pthread_rwlockattr_setpshared (pthread_rwlockattr_t *__attr, int __ps
 
 static const int PTHREAD_PROCESS_SHARED = 1;
 ]]
-else
-error("arch not support: " .. ffi.arch)
-end
