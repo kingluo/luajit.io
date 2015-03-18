@@ -38,8 +38,15 @@ sighandler_t signal (int __sig, sighandler_t __handler);
 
 static const int32_t SI_ASYNCNL = -60;
 
+static const int SIGHUP = 1;
 static const int SIGINT = 2;
-static const int SIGCHLD = 17;
+static const int SIGQUIT = 3;
+static const int SIGUSR1 = 10;
+static const int SIGSEGV = 11;
+static const int SIGUSR2 = 12;
 static const int SIGPIPE = 13;
+static const int SIGTERM = 15;
+static const int SIGCHLD = 17;
+static const int SIGWINCH = 28;
 static const int SIGIO = 29;
 ]]

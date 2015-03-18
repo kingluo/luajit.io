@@ -1,5 +1,4 @@
-conf_file = arg[0]
-conf_path = string.match(conf_file, ".*/") or "./"
+local conf_path = string.match(arg[0], ".*/") or "./"
 package.path = package.path .. ";"
 	.. conf_path .. "../lib/?.lua;" .. conf_path .. "../lib/?/init.lua"
 

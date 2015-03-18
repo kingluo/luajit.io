@@ -57,6 +57,7 @@ end
 ffi.cdef[[
 typedef unsigned int mode_t;
 typedef int __pid_t;
+typedef __pid_t pid_t;
 typedef long int __off_t;
 typedef __off_t off_t;
 
@@ -146,6 +147,10 @@ ffi.cdef[[
 int fcntl (int __fd, int __cmd, ...);
 long int syscall (long int __sysno, ...);
 int fork(void);
+int execvpe(const char *filename, void *const argv[], void *const envp[]);
+int unsetenv(const char *name);
+pid_t waitpid(pid_t pid, int *status, int options);
+int kill(pid_t pid, int sig);
 int getpid(void);
 char *strerror(int errnum);
 
@@ -157,6 +162,7 @@ extern ssize_t read(int fd, void *buf, size_t count);
 extern ssize_t write(int fd, const void *buf, size_t count);
 ssize_t writev(int fd, const struct iovec *iov, int iovcnt);
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, __off_t offset);
+int munmap(void *addr, size_t length);
 ssize_t sendfile(int out_fd, int in_fd, off_t *offset, size_t count);
 int unlink(const char *pathname);
 
@@ -214,4 +220,6 @@ static const int EINPROGRESS = 115;
 
 const static clockid_t CLOCK_MONOTONIC = 1;
 const static clockid_t CLOCK_MONOTONIC_RAW = 4;
+
+static const int WNOHANG = 1;
 ]]

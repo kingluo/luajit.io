@@ -7,7 +7,8 @@ local epoll = require("ljio.core.epoll")
 local rbtree = require("ljio.core.rbtree")
 
 local g_timer_fd
-local g_timer_ev = {}
+local g_timer_ev
+local g_timer_rbtree
 
 local function timer_lt(a,b)
 	if a.tv_sec < b.tv_sec then return true end
@@ -16,8 +17,6 @@ local function timer_lt(a,b)
 	end
 	return false
 end
-
-local g_timer_rbtree = rbtree.new(timer_lt)
 
 local timer_mt = {
 	__index = {
@@ -98,9 +97,12 @@ local function get_next_interval()
 end
 
 local function init()
-	if g_timer_fd then return end
+	if g_timer_fd then
+		assert(C.close(g_timer_fd) == 0)
+	end
 	g_timer_fd = C.timerfd_create(C.CLOCK_MONOTONIC, 0)
 	assert(g_timer_fd > 0)
+	g_timer_ev = {}
 	g_timer_ev.fd = g_timer_fd
 	g_timer_ev.handler = function()
 		print("child pid=" .. C.getpid() .. " timer fired")
@@ -110,6 +112,7 @@ local function init()
 		if sec then timerfd_settime(g_timer_fd, sec, nsec) end
 	end
 	epoll.add_event(g_timer_ev, C.EPOLLIN)
+	g_timer_rbtree = rbtree.new(timer_lt)
 end
 
 return {

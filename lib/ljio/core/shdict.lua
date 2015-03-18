@@ -15,7 +15,7 @@ local bor = bit.bor
 local tconcat = table.concat
 local tinsert = table.insert
 
-local dict_list = {}
+local M = {}
 local _M = {}
 local shdict_mt = {__index = _M}
 
@@ -73,7 +73,7 @@ local function create_dict(name, size)
 	local buckets_sz = dict.bsize * ffi.sizeof("shdict_kv_t*")
 	dict.buckets = ffi.cast("shdict_kv_t**", slab.alloc(pool, buckets_sz))
 	C.memset(dict.buckets, 0, buckets_sz)
-	dict_list[name] = setmetatable({dict=dict, pool=pool}, shdict_mt)
+	M.shared[name] = setmetatable({dict=dict, pool=pool, addr=addr, size=size}, shdict_mt)
 end
 
 local function key2bucket(dict, key, ksize)
@@ -125,7 +125,7 @@ end
 
 local function expire_handler()
 	rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, now)
-	for name,dict in pairs(dict_list) do
+	for name,dict in pairs(M.shared) do
 		pthread.pthread_rwlock_wrlock(dict.dict.lock)
 		local kv = 	dict.dict.qtail
 		local count = 0
@@ -143,8 +143,15 @@ local function expire_handler()
 	add_timer(expire_handler, 1)
 end
 
-local function init(cfg)
+function M.init(cfg)
+	if M.shared then
+		for name,dict in pairs(M.shared) do
+			print("munmap " .. name)
+			assert(C.munmap(dict.addr, dict.size) == 0)
+		end
+	end
 	if cfg.lua_shared_dict then
+		M.shared = {}
 		for name,size in pairs(cfg.lua_shared_dict) do
 			local size, unit = string.match(size, "(%d+)([km])")
 			assert(size and unit)
@@ -158,7 +165,7 @@ local function init(cfg)
 	end
 end
 
-local function start_expire_timer()
+function M.start_expire_timer()
 	-- add_timer(expire_handler, 1)
 end
 
@@ -350,8 +357,4 @@ function _M.get_keys(self, max_count)
 	return unpack(t)
 end
 
-return {
-	init = init,
-	start_expire_timer = start_expire_timer,
-	shared = dict_list
-}
+return M

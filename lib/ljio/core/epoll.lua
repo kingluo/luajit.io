@@ -5,8 +5,8 @@ local C = require("ljio.cdef")
 local bit = require("bit")
 
 local g_epoll_fd
-local g_prepare_hooks = {}
-local handlers = setmetatable({},{__mode="v"})
+local g_prepare_hooks
+local handlers
 
 local MAX_EPOLL_EVENT = 128
 local ev_set = ffi.new("struct epoll_event[?]", MAX_EPOLL_EVENT)
@@ -46,9 +46,12 @@ local function del_event(ev, ...)
 end
 
 local function init(epoll_size)
-	if not g_epoll_fd then
-		g_epoll_fd = C.epoll_create(epoll_size or 20000)
+	if g_epoll_fd then
+		assert(C.close(g_epoll_fd) == 0)
 	end
+	g_epoll_fd = C.epoll_create(epoll_size or 20000)
+	g_prepare_hooks = {}
+	handlers = setmetatable({},{__mode="v"})
 end
 
 local function add_prepare_hook(hook)

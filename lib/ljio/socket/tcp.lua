@@ -10,6 +10,7 @@ local signal = require("ljio.core.signal")
 local dfa_compile = require("ljio.core.dfa").compile
 local logging = require("ljio.core.logging")
 local shdict = require("ljio.core.shdict")
+local master = require("ljio.core.master")
 
 local dns = require("ljio.socket.dns")
 local ssl = require("ljio.socket.ssl")
@@ -612,11 +613,13 @@ function tcp_mt.__index.bind(self, ip, port)
 end
 
 function tcp_mt.__index.listen(self, backlog, handler)
+	if self.listening then return 1 end
 	backlog = backlog or 1000
 	local ret = C.listen(self.fd, backlog)
 	if ret ~= 0 then return nil, utils.strerror() end
 	self.ev.handler = handler
 	epoll.add_event(self.ev, C.EPOLLIN)
+	self.listening = true
 	return 1
 end
 
@@ -850,29 +853,38 @@ local g_listen_sk_tbl = {}
 local g_tcp_cfg
 
 local function tcp_parse_conf(cfg)
-	g_tcp_cfg = cfg
-	cfg.conf_path = strmatch(arg[0], ".*/") or "./"
+	local inherited_fdlist = os.getenv("LUAJITIO")
+	if inherited_fdlist then
+		C.unsetenv("LUAJITIO")
+		local addr = ffi.cast("struct sockaddr *", ffi.new("char[512]"))
+		local len = ffi.new("unsigned int[1]", ffi.sizeof(addr))
+		for fd in string.gmatch(inherited_fdlist, "%d+") do
+			fd = tonumber(fd)
+			len[0] = 512
+			assert(C.getsockname(fd, addr, len) == 0)
 
-	cfg.user = cfg.user or "nobody"
-	cfg.group = cfg.group or user
-	local pw = C.getpwnam(cfg.user)
-	if pw == NULL then error("invalid user: " .. cfg.user) end
-	cfg.uid = pw.pw_uid
-	local grp = C.getgrnam(cfg.group)
-	if grp == NULL then error("invalid group: " .. cfg.group) end
-	cfg.gid = grp.gr_gid
+			local sock = tcp_new(fd)
+			sock.family = addr.sa_family
 
-	shdict.init(cfg)
-
-	logging.init(cfg)
-	if cfg.log_import_print then logging.import_print() end
-
-	if cfg.strict then require("ljio.core.strict") end
+			if addr.sa_family == C.AF_INET then
+				local addr2 = ffi.cast("struct sockaddr_in*", addr)
+				sock.ip = ffi.string(C.inet_ntoa(addr2.sin_addr))
+				if sock.ip == "0.0.0.0" then
+					sock.ip = "*"
+				end
+				sock.port = C.htons(tonumber(addr2.sin_port))
+			else
+				local addr2 = ffi.cast("struct sockaddr_un*", addr)
+				sock.ip = "unix:" .. ffi.string(addr2.sun_path)
+				sock.port = "unix"
+			end
+			g_listen_sk_tbl[fd] = sock
+		end
+	end
 
 	ssl.init(cfg)
 
 	local srv_tbl = {}
-	cfg.srv_tbl = srv_tbl
 
 	for _,srv in ipairs(cfg) do
 		if not srv.listen then
@@ -881,7 +893,7 @@ local function tcp_parse_conf(cfg)
 		for _,linfo in ipairs(srv.listen) do
 			local port = linfo.port
 			if linfo.address then
-				local path = strmatch(linfo.address, "unix:(.*)")
+				local path = strmatch(linfo.address, "^unix:(.+)$")
 				if path then
 					port = "unix"
 				end
@@ -895,31 +907,53 @@ local function tcp_parse_conf(cfg)
 				srv_tbl[port][address] = {}
 				srv_tbl[port][address]["linfo"] = linfo
 				if linfo.default_server then
-					srv_tbl[port][address]["default_server"] = srv
+					srv_tbl[port][address].default_server = srv
 				end
 			end
 			tinsert(srv_tbl[port][address], srv)
 		end
 	end
 
-	-- setup all listen sockets
-	for port,addresses in pairs(srv_tbl) do
-		if addresses["*"] then
-			local ssock = tcp_new()
-			ssock.linfo = addresses["*"].linfo
-			local r,err = ssock:bind("*", port)
-			if err then error(err) end
-			g_listen_sk_tbl[ssock.fd] = ssock
-		else
-			for address,srv_list in pairs(addresses) do
-				local ssock = tcp_new()
-				ssock.linfo = srv_list.linfo
-				local r,err = ssock:bind(address, port)
-				if err then error(err) end
-				g_listen_sk_tbl[ssock.fd] = ssock
+	if not inherited_fdlist then
+		for port,addresses in pairs(srv_tbl) do
+			if addresses["*"] then
+				if g_tcp_cfg == nil or g_tcp_cfg.srv_tbl == nil then
+					local ssock = tcp_new()
+					ssock.linfo = addresses["*"].linfo
+					local r,err = ssock:bind("*", port)
+					if err then error(err) end
+					g_listen_sk_tbl[ssock.fd] = ssock
+				end
+			else
+				for address,srv_list in pairs(addresses) do
+					if g_tcp_cfg == nil or g_tcp_cfg.srv_tbl == nil
+						or g_tcp_cfg.srv_tbl[port] == nil or g_tcp_cfg.srv_tbl[port][address] == nil then
+						local ssock = tcp_new()
+						ssock.linfo = srv_list.linfo
+						local r,err = ssock:bind(address, port)
+						if err then error(err) end
+						g_listen_sk_tbl[ssock.fd] = ssock
+					end
+				end
 			end
 		end
+
+		if cfg.srv_tbl then
+			for port,addresses in pairs(cfg.srv_tbl) do
+
+			end
+		end
+	else
+		for _,ssock in pairs(g_listen_sk_tbl) do
+		print(ssock.ip,ssock.port)
+			ssock.linfo = srv_tbl[ssock.port][ssock.ip].linfo
+		end
 	end
+
+	cfg.srv_tbl = srv_tbl
+	cfg.listening_fd = g_listen_sk_tbl
+
+	g_tcp_cfg = cfg
 end
 
 local function tcp_handler(sock)
@@ -940,112 +974,67 @@ local function do_all_listen_sk(func)
 	end
 end
 
-local NULL = ffi.new("void*")
+local function init_worker(conn_handler)
+	local shutting_down = false
+	local connections = 0
+	local wait_listen_sk = false
 
-local function run(cfg, parse_conf, overwrite_handler)
-	local conn_handler = overwrite_handler or tcp_handler
-
-	tcp_parse_conf(cfg)
-	if parse_conf then parse_conf(cfg) end
-
-	if g_tcp_cfg.daemon then
-		assert(C.daemon(0,0) == 0)
-	end
-
-	local worker_processes = g_tcp_cfg.worker_processes
-	local sigchld_handler = function(siginfo)
-		print ("> child exit with pid=" .. siginfo.ssi_pid .. ", status=" .. siginfo.ssi_status)
-		worker_processes = worker_processes - 1
-	end
-	signal.add_signal_handler(C.SIGCHLD, sigchld_handler)
-
-	-- avoid crash triggered by SIGPIPE
-	signal.ignore_signal(C.SIGPIPE)
-
-	for i=1,worker_processes do
-		local pid = C.fork()
-		if pid == 0 then
-			print("child pid=" .. C.getpid() .. " enter")
-			signal.del_signal_handler(C.SIGCHLD, sigchld_handler)
-
-			if C.geteuid() == 0 then
-				assert(C.setgid(g_tcp_cfg.gid) == 0)
-				assert(C.initgroups(g_tcp_cfg.user, g_tcp_cfg.gid) == 0)
-				assert(C.setuid(g_tcp_cfg.uid) == 0)
+	local ssock_handler = function(ev)
+		local sock,err = ev.sock:accept()
+		if sock then
+			print("child pid=" .. C.getpid() .. " get new connection, cfd=" .. sock.fd .. ", port=" .. sock.port)
+			connections = connections + 1
+			if connections >= g_tcp_cfg.worker_connections then
+				print("child pid=" .. C.getpid() .. " unlisten sk")
+				do_all_listen_sk(function(ssock) epoll.del_event(ssock.ev) end)
+				wait_listen_sk = false
 			end
-
-			local connections = 0
-			local wait_listen_sk = false
-
-			local ssock_handler = function(ev)
-				local sock,err = ev.sock:accept()
-				if sock then
-					print("child pid=" .. C.getpid() .. " get new connection, cfd=" .. sock.fd .. ", port=" .. sock.port)
-					connections = connections + 1
-					if connections >= g_tcp_cfg.worker_connections then
-						print("child pid=" .. C.getpid() .. " unlisten sk")
-						do_all_listen_sk(function(ssock) epoll.del_event(ssock.ev) end)
-						wait_listen_sk = false
+			coroutine.spawn(
+				conn_handler,
+				function()
+					print("child pid=" .. C.getpid() .. " remove connection, cfd=" .. sock.fd)
+					sock:close()
+					connections = connections - 1
+					if shutting_down and connections == 0 then
+						os.exit(C.SIGQUIT)
 					end
-					coroutine.spawn(
-						conn_handler,
-						function()
-							print("child pid=" .. C.getpid() .. " remove connection, cfd=" .. sock.fd)
-							sock:close()
-							connections = connections - 1
-							if (not wait_listen_sk) and connections < g_tcp_cfg.worker_connections then
-								print("child pid=" .. C.getpid() .. " listen sk")
-								do_all_listen_sk(function(ssock) epoll.add_event(ssock.ev, C.EPOLLIN) end)
-								wait_listen_sk = true
-							end
-						end,
-						sock
-					)
-				else
-					print("child pid=" .. C.getpid() .. " accept error: " .. err)
-				end
-			end
-
-			-- init the event loop
-			epoll.init()
-
-			-- init signal subsystem
-			signal.init()
-
-			-- init timer subsystem
-			timer.init()
-
-			-- listen all server sockets
-			do_all_listen_sk(function(ssock)
-				local r,err = ssock:listen(100, ssock_handler)
-				if err then error(err) end
-			end)
-			wait_listen_sk = true
-
-			-- run the event loop
-			epoll.run()
-			print("child pid=" .. C.getpid() .. " exit")
-			os.exit(0)
+					if (not wait_listen_sk) and connections < g_tcp_cfg.worker_connections then
+						print("child pid=" .. C.getpid() .. " listen sk")
+						do_all_listen_sk(function(ssock) epoll.add_event(ssock.ev, C.EPOLLIN) end)
+						wait_listen_sk = true
+					end
+				end,
+				sock
+			)
+		else
+			print("child pid=" .. C.getpid() .. " accept error: " .. err)
 		end
 	end
 
-	-- master event loop
-	print("> parent wait " .. worker_processes .. " child")
-	epoll.init()
-	epoll.add_prepare_hook(function()
-		assert(worker_processes >= 0)
-		return -1, (worker_processes == 0)
+	-- listen all server sockets
+	do_all_listen_sk(function(ssock)
+		local r,err = ssock:listen(100, ssock_handler)
+		if err then error(err) end
 	end)
-	signal.init()
-	timer.init()
-	shdict.start_expire_timer()
-	epoll.run()
-	print "> parent exit"
-	os.exit(0)
+	wait_listen_sk = true
+
+	signal.add_signal_handler(C.SIGQUIT, function()
+		shutting_down = true
+		do_all_listen_sk(function(ssock) epoll.del_event(ssock.ev) end)
+	end)
+
+	signal.add_signal_handler(C.SIGTERM, function() os.exit(C.SIGTERM) end)
+	signal.add_signal_handler(C.SIGINT, function() os.exit(C.SIGINT) end)
+end
+
+local function run(cfg, parse_conf, conn_handler)
+	return master.run(cfg, parse_conf or tcp_parse_conf, function()
+		return init_worker(conn_handler or tcp_handler) end)
 end
 
 return setmetatable({
 	new = tcp_new,
+	parse_conf = tcp_parse_conf
 }, {
 	__call = function(func, ...) return run(...) end
 })
