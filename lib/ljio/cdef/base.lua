@@ -200,6 +200,8 @@ struct passwd *getpwnam(const char *name);
 struct group *getgrnam(const char *name);
 int initgroups(const char *user, gid_t group);
 int daemon(int nochdir, int noclose);
+
+char *getcwd(char *buf, size_t size);
 ]]
 
 ffi.cdef[[

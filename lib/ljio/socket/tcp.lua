@@ -1019,6 +1019,9 @@ local function init_worker(conn_handler)
 	wait_listen_sk = true
 
 	signal.add_signal_handler(C.SIGQUIT, function()
+		if connections == 0 then
+			os.exit(C.SIGQUIT)
+		end
 		shutting_down = true
 		do_all_listen_sk(function(ssock) epoll.del_event(ssock.ev) end)
 	end)
@@ -1028,8 +1031,9 @@ local function init_worker(conn_handler)
 end
 
 local function run(cfg, parse_conf, conn_handler)
-	return master.run(cfg, parse_conf or tcp_parse_conf, function()
-		return init_worker(conn_handler or tcp_handler) end)
+	return master.run(cfg,
+		function(cfg) tcp_parse_conf(cfg); if parse_conf then parse_conf(cfg) end end,
+		function() return init_worker(conn_handler or tcp_handler) end)
 end
 
 return setmetatable({

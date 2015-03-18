@@ -3,7 +3,6 @@
 local C = require("ljio.cdef")
 local ffi = require("ffi")
 local tcp = require("ljio.socket.tcp")
-local tcp_parse_conf = tcp.parse_conf
 local URI = require("uri")
 local uri_encode = require("uri._util").uri_encode
 local uri_decode = require("uri._util").uri_decode
@@ -458,8 +457,6 @@ local function more_than(a,b)
 end
 
 local function http_parse_conf(cfg)
-	tcp_parse_conf(cfg)
-
 	g_http_cfg = cfg
 
 	cfg.get_mime_types = get_mime_types

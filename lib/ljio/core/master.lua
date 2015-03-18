@@ -13,17 +13,6 @@ local tinsert = table.insert
 local log = logging.log
 
 local function master_parse_conf(cfg)
-	local paths = {}
-	for path in string.gmatch(package.path, "[^;]+") do
-		if paths[path] == nil then
-			table.insert(paths, path)
-		end
-	end
-	package.path = table.concat(paths, ";")
-
-	cfg.conf_file = arg[0]
-	cfg.conf_path = strmatch(arg[0], ".*/") or "./"
-
 	cfg.user = cfg.user or "nobody"
 	cfg.group = cfg.group or user
 	local pw = C.getpwnam(cfg.user)
@@ -59,13 +48,28 @@ local function run_worker(cfg, init_worker)
 	init_worker()
 
 	epoll.run()
-	print("child pid=" .. C.getpid() .. " exit")
+
 	os.exit(0)
 end
 
 local M = {}
 
 function M.run(cfg, parse_conf, init_worker)
+	cfg.conf_file = arg[0]
+	cfg.conf_path = strmatch(arg[0], ".*/") or "./"
+	if string.sub(cfg.conf_file, 1, 1) ~= "/" then
+		local path_max = 4096
+		local prefix = ffi.new("char[?]", path_max)
+		assert(C.getcwd(prefix, path_max) == prefix)
+		prefix = ffi.string(prefix)
+		cfg.conf_file = prefix .. "/" .. cfg.conf_file
+		cfg.conf_path = prefix .. "/" .. cfg.conf_path
+		local f = io.open(cfg.conf_file)
+		assert(f)
+		f:close()
+	end
+	conf_file = cfg.conf_file
+
 	master_parse_conf(cfg)
 	parse_conf(cfg)
 
@@ -79,19 +83,29 @@ function M.run(cfg, parse_conf, init_worker)
 
 	signal.init()
 
+	local shutting_down = false
 	local childs = {}
 	local n_childs = 0
+
 	signal.add_signal_handler(C.SIGHUP, function()
 		local bak = M.run
 		M.run = function(cfg, parse_conf)
 			master_parse_conf(cfg)
 			parse_conf(cfg)
 		end
-		assert(loadfile(cfg.conf_file))(cfg.conf_file)
+		local fn = loadfile(cfg.conf_file)
+		local co = coroutine.create(fn, nil)
+		local ret,err = coroutine.resume(co, cfg.conf_file)
 		M.run = bak
+		if err then
+			print("reload error: " .. err)
+			return
+		end
+
 		for pid in pairs(childs) do
 			C.kill(pid, C.SIGQUIT)
 		end
+
 		for i= 1, cfg.worker_processes do
 			local pid = C.fork()
 			if pid > 0 then
@@ -99,7 +113,7 @@ function M.run(cfg, parse_conf, init_worker)
 				n_childs = n_childs + 1
 			end
 			if pid == 0 then
-				run_worker(cfg, init_worker)
+				return run_worker(cfg, init_worker)
 			end
 		end
 	end)
@@ -118,9 +132,8 @@ function M.run(cfg, parse_conf, init_worker)
 			childs[pid] = 1
 			n_childs = n_childs + 1
 		end
-		if n_childs == 0 then
-			print "> parent exit"
-			os.exit(0)
+		if shutting_down and n_childs == 0 then
+			os.exit()
 		end
 	end)
 
@@ -155,18 +168,25 @@ function M.run(cfg, parse_conf, init_worker)
 	end)
 
 	signal.add_signal_handler(C.SIGTERM, function()
+		if n_childs == 0 then os.exit() end
+		shutting_down = true
 		for pid in pairs(childs) do
+		print("SIGTERM",pid)
 			C.kill(pid, C.SIGTERM)
 		end
 	end)
 
 	signal.add_signal_handler(C.SIGQUIT, function()
+		if n_childs == 0 then os.exit() end
+		shutting_down = true
 		for pid in pairs(childs) do
 			C.kill(pid, C.SIGQUIT)
 		end
 	end)
 
 	signal.add_signal_handler(C.SIGINT, function()
+		if n_childs == 0 then os.exit() end
+		shutting_down = true
 		for pid in pairs(childs) do
 			C.kill(pid, C.SIGINT)
 		end

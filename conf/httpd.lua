@@ -9,11 +9,11 @@ require("ljio.http") {
 	-- logging
 	log_level = "debug",
 	log_stderr = true,
-	log_import_print = false,
+	log_import_print = true,
 
 	user = "nobody",
 	group = "nogroup",
-	daemon = false,
+	daemon = true,
 	worker_processes = 1,
 	worker_connections = 100,
 

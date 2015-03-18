@@ -17,7 +17,7 @@ local signal_ev
 
 local function add_signal_handler(signo, handler)
 	if not handlers[signo] then
-		handlers[signo] = setmetatable({},{__mode="v"})
+		handlers[signo] = {}
 	end
 	if #handlers[signo] == 0 then
 		C.sigaddset(g_mask, signo)
