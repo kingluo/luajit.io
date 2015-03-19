@@ -38,7 +38,8 @@ local function log(level, ...)
 	end
 	level = levels[level]
 	if level <= g_log_level then
-		local t = {...,"\n"}
+		local t = {...}
+		table.insert(t, "\n")
 		local str = tconcat(t)
 		C.syslog(level, str)
 	end

@@ -202,6 +202,7 @@ int initgroups(const char *user, gid_t group);
 int daemon(int nochdir, int noclose);
 
 char *getcwd(char *buf, size_t size);
+int chdir(const char *path);
 ]]
 
 ffi.cdef[[

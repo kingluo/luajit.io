@@ -1,6 +1,6 @@
-local conf_path = string.match(arg[0], ".*/") or "./"
+local conf_prefix = string.match(arg[0], ".*/") or "./"
 package.path = package.path .. ";"
-	.. conf_path .. "../lib/?.lua;" .. conf_path .. "../lib/?/init.lua"
+	.. conf_prefix .. "../lib/?.lua;" .. conf_prefix .. "../lib/?/init.lua"
 
 require("ljio.http") {
 	-- toggle strict global env
@@ -9,11 +9,12 @@ require("ljio.http") {
 	-- logging
 	log_level = "debug",
 	log_stderr = true,
-	log_import_print = true,
+	log_import_print = false,
 
 	user = "nobody",
 	group = "nogroup",
-	daemon = true,
+	working_directory = conf_prefix .. "../",
+	daemon = false,
 	worker_processes = 1,
 	worker_connections = 100,
 
@@ -35,6 +36,7 @@ require("ljio.http") {
 		["text/plain"] = true,
 		["application/javascript"] = true,
 		["text/css"] = true,
+		["application/json"] = true,
 	},
 
 	types = "mime.types",
@@ -72,26 +74,19 @@ require("ljio.http") {
 		},
 		server_name = {"example.net", "*.example.com", "~my%d+web%.org"},
 		root = "/srv/foobar",
-		package_path = package.path
-			.. ";" .. conf_path .. "../test/?.lua"
-			.. ";" .. conf_path .. "../test/?/init.lua",
 		default_type = 'text/plain',
 		location = {
 			{"=", "/hello", function(req, rsp) rsp:say("hello world!") end},
 			{
 				"f",
 				function(req)
-					if string.find(req.headers["user-agent"], "curl") then
-						return string.match(req.url:path(), "^/test/([a-zA-Z0-9_%-/]*)")
+					if string.find(req.headers["user-agent"], "curl", 1, true) then
+						return string.match(req.url:path(), "^/(test/[a-zA-Z0-9_%-/]*)")
 					end
 				end,
 				function(req, rsp)
-					local test = string.gsub(req.match_data[1], "/", ".")
-					return require(test)(req, rsp)
-				end,
-				gzip_types = {
-					["application/json"] = true,
-				}
+					return require(req.match_data[1])(req, rsp)
+				end
 			},
 		}
 	},

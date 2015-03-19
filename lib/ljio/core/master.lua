@@ -8,10 +8,6 @@ local signal = require("ljio.core.signal")
 local logging = require("ljio.core.logging")
 local shdict = require("ljio.core.shdict")
 
-local strmatch = string.match
-local tinsert = table.insert
-local log = logging.log
-
 local function master_parse_conf(cfg)
 	cfg.user = cfg.user or "nobody"
 	cfg.group = cfg.group or user
@@ -45,6 +41,10 @@ local function run_worker(cfg, init_worker)
 
 	timer.init()
 
+	if cfg.working_directory then
+		assert(C.chdir(cfg.working_directory) == 0)
+	end
+
 	init_worker()
 
 	epoll.run()
@@ -56,25 +56,24 @@ local M = {}
 
 function M.run(cfg, parse_conf, init_worker)
 	cfg.conf_file = arg[0]
-	cfg.conf_path = strmatch(arg[0], ".*/") or "./"
+	cfg.conf_prefix = string.match(arg[0], ".*/") or "./"
 	if string.sub(cfg.conf_file, 1, 1) ~= "/" then
 		local path_max = 4096
 		local prefix = ffi.new("char[?]", path_max)
 		assert(C.getcwd(prefix, path_max) == prefix)
 		prefix = ffi.string(prefix)
 		cfg.conf_file = prefix .. "/" .. cfg.conf_file
-		cfg.conf_path = prefix .. "/" .. cfg.conf_path
+		cfg.conf_prefix = prefix .. "/" .. cfg.conf_prefix
 		local f = io.open(cfg.conf_file)
 		assert(f)
 		f:close()
 	end
-	conf_file = cfg.conf_file
 
 	master_parse_conf(cfg)
 	parse_conf(cfg)
 
 	if cfg.daemon then
-		assert(C.daemon(0,0) == 0)
+		assert(C.daemon(cfg.working_directory and 1 or 0, 0) == 0)
 	end
 
 	signal.ignore_signal(C.SIGPIPE)

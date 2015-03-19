@@ -44,10 +44,26 @@ local function http_time(t)
 	return ffi.string(date_buf, len)
 end
 
+local function normalize_lua_path(path)
+	local path_max = 4096
+	local prefix = ffi.new("char[?]", path_max)
+	assert(C.getcwd(prefix, path_max) == prefix)
+	prefix = ffi.string(prefix)
+	local t = {}
+	for p in string.gmatch(path, "[^;]+") do
+		if string.sub(p,1,1) ~= "/" then
+			p = prefix .. "/" .. p
+		end
+		table.insert(t, p)
+	end
+	return table.concat(t, ";")
+end
+
 return {
 	fd_guard = fd_guard,
 	set_nonblock = set_nonblock,
 	strerror = strerror,
 	bin2hex = bin2hex,
 	http_time = http_time,
+	normalize_lua_path = normalize_lua_path,
 }

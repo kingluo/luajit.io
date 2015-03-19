@@ -399,7 +399,7 @@ function http_rsp_mt.__index.try_file(self, path, eof, absolute)
 	local path = path or req.url:path()
 	local ext = string.match(path, "%.([^%.]+)$")
 	if self.headers["content-type"] == nil then
-		self.headers["content-type"] = lcf:get_mime_types()[ext] or "application/octet-stream"
+		self.headers["content-type"] = lcf.mime_types[ext] or "application/octet-stream"
 	end
 	local fpath
 	if absolute then
@@ -429,29 +429,6 @@ end
 
 local g_http_cfg
 
-local function get_mime_types(cf)
-	if cf.mime_types then
-		return cf.mime_types
-	else
-		cf.mime_types = {}
-	end
-	local path = cf.types
-	if strsub(cf.types,1,1) ~= "/" then
-		path = cf.conf_path .. "/" .. cf.types
-	end
-	local f = io.open(path)
-	assert(f)
-	local data = f:read("*a")
-	assert(data)
-	for typ,exts in string.gmatch(data, "([^;%s]+)%s+([a-zA-Z0-9%s]+);") do
-		for ext in string.gmatch(exts, "%w+") do
-			cf.mime_types[ext] = typ
-		end
-	end
-	f:close()
-	return cf.mime_types
-end
-
 local function more_than(a,b)
 	return a > b
 end
@@ -459,7 +436,21 @@ end
 local function http_parse_conf(cfg)
 	g_http_cfg = cfg
 
-	cfg.get_mime_types = get_mime_types
+	cfg.mime_types = {}
+	local types = cfg.types
+	if strsub(cfg.types,1,1) ~= "/" then
+		types = cfg.conf_prefix .. "/" .. cfg.types
+	end
+	types = io.open(types)
+	assert(types)
+	local data = types:read("*a")
+	types:close()
+	assert(data)
+	for typ,exts in string.gmatch(data, "([^;%s]+)%s+([a-zA-Z0-9%s]+);") do
+		for ext in string.gmatch(exts, "%w+") do
+			cfg.mime_types[ext] = typ
+		end
+	end
 
 	local global_mt = {__index=cfg}
 	for _,srv in ipairs(cfg) do
