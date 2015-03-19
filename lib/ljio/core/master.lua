@@ -7,6 +7,7 @@ local timer = require("ljio.core.timer")
 local signal = require("ljio.core.signal")
 local logging = require("ljio.core.logging")
 local shdict = require("ljio.core.shdict")
+local ssl = require("ljio.socket.ssl")
 
 local function master_parse_conf(cfg)
 	cfg.user = cfg.user or "nobody"
@@ -27,7 +28,7 @@ local function master_parse_conf(cfg)
 end
 
 local function run_worker(cfg, init_worker)
-	print("child pid=" .. C.getpid() .. " enter")
+	print("fork worker pid=" .. C.getpid())
 
 	if C.geteuid() == 0 then
 		assert(C.setgid(cfg.gid) == 0)
@@ -40,6 +41,8 @@ local function run_worker(cfg, init_worker)
 	signal.init()
 
 	timer.init()
+
+	ssl.init(cfg)
 
 	if cfg.working_directory then
 		assert(C.chdir(cfg.working_directory) == 0)
@@ -70,6 +73,7 @@ function M.run(cfg, parse_conf, init_worker)
 	end
 
 	master_parse_conf(cfg)
+
 	parse_conf(cfg)
 
 	if cfg.daemon then
@@ -82,48 +86,73 @@ function M.run(cfg, parse_conf, init_worker)
 
 	signal.init()
 
+	local upgrade_phase = 0
+	local new_master_pid
 	local shutting_down = false
 	local childs = {}
 	local n_childs = 0
 
 	signal.add_signal_handler(C.SIGHUP, function()
-		local bak = M.run
-		M.run = function(cfg, parse_conf)
-			master_parse_conf(cfg)
-			parse_conf(cfg)
-		end
-		local fn = loadfile(cfg.conf_file)
-		local co = coroutine.create(fn, nil)
-		local ret,err = coroutine.resume(co, cfg.conf_file)
-		M.run = bak
-		if err then
-			print("reload error: " .. err)
-			return
+		if upgrade_phase == 0 then
+			local bak = M.run
+			M.run = function(newcfg, parse_conf)
+				newcfg.conf_file = cfg.conf_file
+				newcfg.conf_prefix = cfg.conf_prefix
+				master_parse_conf(newcfg)
+				parse_conf(newcfg)
+			end
+			local fn = loadfile(cfg.conf_file)
+			local co = coroutine.create(fn, nil)
+			local ret,err = coroutine.resume(co, cfg.conf_file)
+			M.run = bak
+			if err then
+				print("reload error: " .. err)
+				return
+			end
+
+			for pid in pairs(childs) do
+				C.kill(pid, C.SIGQUIT)
+				childs[pid] = nil
+			end
 		end
 
-		for pid in pairs(childs) do
-			C.kill(pid, C.SIGQUIT)
-		end
-
-		for i= 1, cfg.worker_processes do
-			local pid = C.fork()
-			if pid > 0 then
-				childs[pid] = 1
-				n_childs = n_childs + 1
+		if upgrade_phase == 0 or upgrade_phase == 2 then
+			for i= 1, cfg.worker_processes do
+				local pid = C.fork()
+				if pid > 0 then
+					childs[pid] = 1
+					n_childs = n_childs + 1
+				elseif pid == 0 then
+					return run_worker(cfg, init_worker)
+				end
 			end
-			if pid == 0 then
-				return run_worker(cfg, init_worker)
-			end
+			upgrade_phase = 0
+			new_master_pid = nil
 		end
 	end)
 
 	signal.add_signal_handler(C.SIGCHLD, function(siginfo)
-		print ("> child exit with pid=" .. siginfo.ssi_pid .. ", status=" .. siginfo.ssi_status)
-		childs[siginfo.ssi_pid] = nil
+		local pid = siginfo.ssi_pid
+
+		C.waitpid(pid, nil, C.WNOHANG)
+
+		if upgrade_phase > 0 and pid == new_master_pid then
+			print("> new master exit")
+			if upgrade_phase == 2 then
+				print("> old master restart workers")
+				return C.kill(C.getpid(), C.SIGHUP)
+			end
+			upgrade_phase = 0
+			new_master_pid = nil
+			return
+		end
+
+		print ("> worker exit pid=" .. pid .. ", status=" .. siginfo.ssi_status)
+
 		n_childs = n_childs - 1
-		C.waitpid(siginfo.ssi_pid, nil, C.WNOHANG)
-		local status = siginfo.ssi_status
-		if status ~= C.SIGQUIT and status ~= C.SIGTERM and status ~= C.SIGINT and status ~= C.SIGSEGV then
+
+		if childs[pid] ~= nil then
+			childs[pid] = nil
 			local pid = C.fork()
 			if pid == 0 then
 				run_worker(cfg, init_worker)
@@ -131,20 +160,32 @@ function M.run(cfg, parse_conf, init_worker)
 			childs[pid] = 1
 			n_childs = n_childs + 1
 		end
+
 		if shutting_down and n_childs == 0 then
 			os.exit()
 		end
 	end)
 
 	signal.add_signal_handler(C.SIGWINCH, function()
+		if upgrade_phase == 1 then
+			upgrade_phase = 2
+		end
+
 		for pid in pairs(childs) do
 			C.kill(pid, C.SIGQUIT)
+			childs[pid] = nil
 		end
 	end)
 
 	signal.add_signal_handler(C.SIGUSR2, function()
-		local pid = C.fork()
-		if pid == 0 then
+		if upgrade_phase > 0 then
+			return
+		end
+
+		upgrade_phase = 1
+
+		new_master_pid = C.fork()
+		if new_master_pid == 0 then
 			local args = {}
 			for k,v in pairs(arg) do
 				args[v] = k
@@ -155,41 +196,33 @@ function M.run(cfg, parse_conf, init_worker)
 			for i=0,#args-1 do
 				argv[i] = ffi.cast("void*", args[i+1])
 			end
+
 			local str = {"LUAJITIO="}
-			for k,v in pairs(cfg.listening_fd) do
+			for k,v in pairs(cfg.listen_fdlist) do
 				table.insert(str, k)
 			end
 			local envp = ffi.new("void*[2]")
 			str = table.concat(str, " ") .. "\0"
 			envp[0] = ffi.cast("void*", str)
+
 			return C.execvpe(args[1], argv, envp)
 		end
 	end)
 
-	signal.add_signal_handler(C.SIGTERM, function()
-		if n_childs == 0 then os.exit() end
-		shutting_down = true
-		for pid in pairs(childs) do
-		print("SIGTERM",pid)
-			C.kill(pid, C.SIGTERM)
+	local function make_exit_func(signo)
+		return function()
+			if n_childs == 0 then os.exit() end
+			shutting_down = true
+			for pid in pairs(childs) do
+				C.kill(pid, signo)
+				childs[pid] = nil
+			end
 		end
-	end)
+	end
 
-	signal.add_signal_handler(C.SIGQUIT, function()
-		if n_childs == 0 then os.exit() end
-		shutting_down = true
-		for pid in pairs(childs) do
-			C.kill(pid, C.SIGQUIT)
-		end
-	end)
-
-	signal.add_signal_handler(C.SIGINT, function()
-		if n_childs == 0 then os.exit() end
-		shutting_down = true
-		for pid in pairs(childs) do
-			C.kill(pid, C.SIGINT)
-		end
-	end)
+	signal.add_signal_handler(C.SIGTERM, make_exit_func(C.SIGTERM))
+	signal.add_signal_handler(C.SIGQUIT, make_exit_func(C.SIGQUIT))
+	signal.add_signal_handler(C.SIGINT, make_exit_func(C.SIGINT))
 
 	timer.init()
 
@@ -200,14 +233,13 @@ function M.run(cfg, parse_conf, init_worker)
 		if pid > 0 then
 			childs[pid] = 1
 			n_childs = n_childs + 1
-		end
-		if pid == 0 then
-			run_worker(cfg, init_worker)
+		elseif pid == 0 then
+			return run_worker(cfg, init_worker)
 		end
 	end
 
 	epoll.run()
-	print "> parent exit"
+
 	os.exit(0)
 end
 

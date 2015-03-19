@@ -852,6 +852,17 @@ end
 local g_listen_sk_tbl = {}
 local g_tcp_cfg
 
+local function add_ssock(port, address, linfo)
+	if g_tcp_cfg == nil or g_tcp_cfg.srv_tbl[port] == nil
+		or g_tcp_cfg.srv_tbl[port][address] == nil then
+		local ssock = tcp_new()
+		ssock.linfo = linfo
+		local r,err = ssock:bind(address, port)
+		if err then error(err) end
+		g_listen_sk_tbl[ssock.fd] = ssock
+	end
+end
+
 local function tcp_parse_conf(cfg)
 	local inherited_fdlist = os.getenv("LUAJITIO")
 	if inherited_fdlist then
@@ -882,14 +893,13 @@ local function tcp_parse_conf(cfg)
 		end
 	end
 
-	ssl.init(cfg)
-
 	local srv_tbl = {}
 
 	for _,srv in ipairs(cfg) do
 		if not srv.listen then
 			srv.listen = {{address="*", port=((C.getuid() == 0) and 80 or 8000)}}
 		end
+
 		for _,linfo in ipairs(srv.listen) do
 			local port = linfo.port
 			if linfo.address then
@@ -897,61 +907,53 @@ local function tcp_parse_conf(cfg)
 				if path then
 					port = "unix"
 				end
+			else
+				linfo.address = "*"
 			end
-			if not linfo.address then linfo.address = "*" end
-			local address = linfo.address
 
-			if not srv_tbl[port] then srv_tbl[port] = {} end
+			if not srv_tbl[port] then
+				srv_tbl[port] = {}
+			end
+
+			local address = linfo.address
 
 			if not srv_tbl[port][address] then
 				srv_tbl[port][address] = {}
-				srv_tbl[port][address]["linfo"] = linfo
+				srv_tbl[port][address].linfo = linfo
 				if linfo.default_server then
 					srv_tbl[port][address].default_server = srv
 				end
 			end
+
 			tinsert(srv_tbl[port][address], srv)
 		end
 	end
 
 	if not inherited_fdlist then
-		for port,addresses in pairs(srv_tbl) do
+		for port, addresses in pairs(srv_tbl) do
 			if addresses["*"] then
-				if g_tcp_cfg == nil or g_tcp_cfg.srv_tbl == nil then
-					local ssock = tcp_new()
-					ssock.linfo = addresses["*"].linfo
-					local r,err = ssock:bind("*", port)
-					if err then error(err) end
-					g_listen_sk_tbl[ssock.fd] = ssock
-				end
+				add_ssock(port, "*", addresses["*"].linfo)
 			else
-				for address,srv_list in pairs(addresses) do
-					if g_tcp_cfg == nil or g_tcp_cfg.srv_tbl == nil
-						or g_tcp_cfg.srv_tbl[port] == nil or g_tcp_cfg.srv_tbl[port][address] == nil then
-						local ssock = tcp_new()
-						ssock.linfo = srv_list.linfo
-						local r,err = ssock:bind(address, port)
-						if err then error(err) end
-						g_listen_sk_tbl[ssock.fd] = ssock
-					end
+				for address, srv_list in pairs(addresses) do
+					add_ssock(port, address, srv_list.linfo)
 				end
 			end
 		end
 
-		if cfg.srv_tbl then
-			for port,addresses in pairs(cfg.srv_tbl) do
-
+		for fd, ssock in pairs(g_listen_sk_tbl) do
+			if srv_tbl[ssock.port] == nil or srv_tbl[ssock.port][ssock.ip] == nil then
+				g_listen_sk_tbl[fd] = nil
+				ssock:close()
 			end
 		end
 	else
-		for _,ssock in pairs(g_listen_sk_tbl) do
-		print(ssock.ip,ssock.port)
+		for _, ssock in pairs(g_listen_sk_tbl) do
 			ssock.linfo = srv_tbl[ssock.port][ssock.ip].linfo
 		end
 	end
 
 	cfg.srv_tbl = srv_tbl
-	cfg.listening_fd = g_listen_sk_tbl
+	cfg.listen_fdlist = g_listen_sk_tbl
 
 	g_tcp_cfg = cfg
 end
@@ -969,7 +971,7 @@ local function tcp_handler(sock)
 end
 
 local function do_all_listen_sk(func)
-	for _,ssock in pairs(g_listen_sk_tbl) do
+	for _, ssock in pairs(g_listen_sk_tbl) do
 		func(ssock)
 	end
 end
@@ -982,24 +984,26 @@ local function init_worker(conn_handler)
 	local ssock_handler = function(ev)
 		local sock,err = ev.sock:accept()
 		if sock then
-			print("child pid=" .. C.getpid() .. " get new connection, cfd=" .. sock.fd .. ", port=" .. sock.port)
+			print("worker pid=" .. C.getpid() .. " get new connection, fd=" .. sock.fd .. ", port=" .. sock.port)
 			connections = connections + 1
 			if connections >= g_tcp_cfg.worker_connections then
-				print("child pid=" .. C.getpid() .. " unlisten sk")
+				print("worker pid=" .. C.getpid() .. " unlisten sk")
 				do_all_listen_sk(function(ssock) epoll.del_event(ssock.ev) end)
 				wait_listen_sk = false
 			end
 			coroutine.spawn(
 				conn_handler,
 				function()
-					print("child pid=" .. C.getpid() .. " remove connection, cfd=" .. sock.fd)
+					print("worker pid=" .. C.getpid() .. " remove connection, fd=" .. sock.fd)
 					sock:close()
 					connections = connections - 1
+
 					if shutting_down and connections == 0 then
-						os.exit(C.SIGQUIT)
+						os.exit()
 					end
-					if (not wait_listen_sk) and connections < g_tcp_cfg.worker_connections then
-						print("child pid=" .. C.getpid() .. " listen sk")
+
+					if wait_listen_sk == false and connections < g_tcp_cfg.worker_connections then
+						print("worker pid=" .. C.getpid() .. " listen sk")
 						do_all_listen_sk(function(ssock) epoll.add_event(ssock.ev, C.EPOLLIN) end)
 						wait_listen_sk = true
 					end
@@ -1007,7 +1011,7 @@ local function init_worker(conn_handler)
 				sock
 			)
 		else
-			print("child pid=" .. C.getpid() .. " accept error: " .. err)
+			print("worker pid=" .. C.getpid() .. " accept error: " .. err)
 		end
 	end
 
@@ -1020,14 +1024,14 @@ local function init_worker(conn_handler)
 
 	signal.add_signal_handler(C.SIGQUIT, function()
 		if connections == 0 then
-			os.exit(C.SIGQUIT)
+			os.exit()
 		end
 		shutting_down = true
 		do_all_listen_sk(function(ssock) epoll.del_event(ssock.ev) end)
 	end)
 
-	signal.add_signal_handler(C.SIGTERM, function() os.exit(C.SIGTERM) end)
-	signal.add_signal_handler(C.SIGINT, function() os.exit(C.SIGINT) end)
+	signal.add_signal_handler(C.SIGTERM, function() os.exit() end)
+	signal.add_signal_handler(C.SIGINT, function() os.exit() end)
 end
 
 local function run(cfg, parse_conf, conn_handler)
@@ -1038,7 +1042,6 @@ end
 
 return setmetatable({
 	new = tcp_new,
-	parse_conf = tcp_parse_conf
 }, {
 	__call = function(func, ...) return run(...) end
 })

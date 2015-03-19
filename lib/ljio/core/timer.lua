@@ -105,7 +105,7 @@ local function init()
 	g_timer_ev = {}
 	g_timer_ev.fd = g_timer_fd
 	g_timer_ev.handler = function()
-		print("child pid=" .. C.getpid() .. " timer fired")
+		print("timer fired pid=" .. C.getpid())
 		timerfd_settime(g_timer_fd, 0, 0)
 		while process_all_timers() > 0 do end
 		local sec,nsec = get_next_interval()
