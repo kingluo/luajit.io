@@ -121,7 +121,10 @@ local function init(cfg)
 	sslctx_list = {}
 
 	for _, srv in ipairs(cfg) do
-		if srv.ssl == true then
+		if srv.ssl_certificate then
+			if srv.ssl_certificate_key == nil then
+				error("ssl_certificate_key not specified")
+			end
 			if init_libssl == false then
 				init_libssl = true
 				cryto.OPENSSL_config(nil)
@@ -133,7 +136,7 @@ local function init(cfg)
 			ssl.SSL_set_read_ahead(sslctx, 1)
 			ssl.SSL_CTX_ctrl(sslctx, C.SSL_CTRL_OPTIONS, C.SSL_OP_NO_COMPRESSION, nil)
 			ssl.SSL_CTX_ctrl(sslctx, C.SSL_CTRL_MODE, C.SSL_MODE_RELEASE_BUFFERS, nil)
-			ssl.SSL_CTX_set_cipher_list(sslctx, srv.ssl_ciphers)
+			ssl.SSL_CTX_set_cipher_list(sslctx, srv.ssl_ciphers or "HIGH:!aNULL:!MD5")
 			ssl.SSL_CTX_use_certificate_file(sslctx, srv.ssl_certificate, C.SSL_FILETYPE_PEM)
 			ssl.SSL_CTX_use_PrivateKey_file(sslctx, srv.ssl_certificate_key, C.SSL_FILETYPE_PEM)
 			srv.sslctx = sslctx

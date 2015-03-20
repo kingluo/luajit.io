@@ -203,6 +203,8 @@ int daemon(int nochdir, int noclose);
 
 char *getcwd(char *buf, size_t size);
 int chdir(const char *path);
+
+int get_nprocs(void);
 ]]
 
 ffi.cdef[[

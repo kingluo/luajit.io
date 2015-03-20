@@ -10,6 +10,14 @@ local shdict = require("ljio.core.shdict")
 local ssl = require("ljio.socket.ssl")
 
 local function master_parse_conf(cfg)
+	cfg.worker_processes = cfg.worker_processes or 1
+	if cfg.worker_processes == "auto" then
+		cfg.worker_processes = C.get_nprocs()
+	end
+	if cfg.worker_processes < 1 then
+		cfg.worker_processes = 1
+	end
+
 	cfg.user = cfg.user or "nobody"
 	cfg.group = cfg.group or user
 	local pw = C.getpwnam(cfg.user)

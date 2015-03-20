@@ -15,7 +15,7 @@ require("ljio.http") {
 	group = "nogroup",
 	working_directory = conf_prefix .. "../",
 	daemon = false,
-	worker_processes = 1,
+	worker_processes = "auto",
 	worker_connections = 100,
 
 	lua_shared_dict = {
@@ -62,7 +62,6 @@ require("ljio.http") {
 		}
 	},
 	{
-		ssl = true,
 		ssl_certificate = "/opt/sslkey/server.crt",
 		ssl_certificate_key = "/opt/sslkey/server.key",
 		ssl_ciphers = "RC4:HIGH:!aNULL:!MD5",
