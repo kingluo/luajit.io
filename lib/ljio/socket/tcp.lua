@@ -637,6 +637,7 @@ function tcp_mt.__index.accept(self)
 	utils.set_nonblock(cfd)
 	local sock = tcp_new(cfd)
 	if self.linfo and self.linfo.ssl then
+		ssl.create_ssl(sock, self.srv.sslctx)
 		sock.hook.read = ssl.read
 		sock.hook.write = ssl.write
 		sock.hook.shutdown = ssl.shutdown
@@ -852,11 +853,12 @@ end
 local g_listen_sk_tbl = {}
 local g_tcp_cfg
 
-local function add_ssock(port, address, linfo)
+local function add_ssock(port, address, linfo, srv)
 	if g_tcp_cfg == nil or g_tcp_cfg.srv_tbl[port] == nil
 		or g_tcp_cfg.srv_tbl[port][address] == nil then
 		local ssock = tcp_new()
 		ssock.linfo = linfo
+		ssock.srv = srv
 		local r,err = ssock:bind(address, port)
 		if err then error(err) end
 		g_listen_sk_tbl[ssock.fd] = ssock
@@ -932,10 +934,10 @@ local function tcp_parse_conf(cfg)
 	if not inherited_fdlist then
 		for port, addresses in pairs(srv_tbl) do
 			if addresses["*"] then
-				add_ssock(port, "*", addresses["*"].linfo)
+				add_ssock(port, "*", addresses["*"].linfo, addresses["*"][1])
 			else
 				for address, srv_list in pairs(addresses) do
-					add_ssock(port, address, srv_list.linfo)
+					add_ssock(port, address, srv_list.linfo, srv_list[1])
 				end
 			end
 		end

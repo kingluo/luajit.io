@@ -7,6 +7,7 @@ int SSL_library_init(void);
 void *SSLv23_method(void);
 void SSL_load_error_strings(void );
 void *SSL_CTX_new(const void *method);
+void SSL_CTX_free(void *ctx);
 void SSL_set_read_ahead(void *s, int yes);
 long SSL_CTX_ctrl(void *ctx,int cmd, long larg, void *parg);
 int SSL_CTX_use_PrivateKey_file(void *ctx, const char *file, int type);

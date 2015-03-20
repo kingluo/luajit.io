@@ -42,8 +42,6 @@ local function run_worker(cfg, init_worker)
 
 	timer.init()
 
-	ssl.init(cfg)
-
 	if cfg.working_directory then
 		assert(C.chdir(cfg.working_directory) == 0)
 	end
@@ -227,6 +225,8 @@ function M.run(cfg, parse_conf, init_worker)
 	timer.init()
 
 	shdict.start_expire_timer()
+
+	ssl.init(cfg)
 
 	for i= 1, cfg.worker_processes do
 		local pid = C.fork()
