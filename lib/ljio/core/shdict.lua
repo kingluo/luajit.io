@@ -31,8 +31,8 @@ struct shdict_kv_s {
 	unsigned char* key;
 	size_t ksize;
 	char typ;
-	size_t vsize;
 	unsigned char* value;
+	size_t vsize;
 	shdict_kv_t* bprev;
 	shdict_kv_t* bnext;
 	shdict_kv_t* qprev;
@@ -61,6 +61,36 @@ local hsize_sel = {3, 13, 23, 53, 97, 193, 389, 769, 1543, 3079, 6151, 12289, 24
 	49157, 98317, 196613, 393241, 786433, 1572869, 3145739, 6291469,
 	12582917, 25165843}
 local hsize_sel_len = #hsize_sel
+
+local function validate_key(key)
+	local typ = type(key)
+	if typ == "number" then
+		key = tostring(key)
+	elseif typ ~= "string" then
+		return nil
+	end
+	return key
+end
+
+local function lru_recycle(dict)
+	pthread.pthread_rwlock_wrlock(dict.dict.lock)
+	local kv = 	dict.dict.qtail
+	local count = 0
+	while kv ~= nil and count < 10 do
+		delete_ll(dict, kv)
+		kv = kv.qprev
+		count = count + 1
+	end
+	pthread.pthread_rwlock_unlock(dict.dict.lock)
+end
+
+local function slab_alloc(self, size, safe)
+	local kv = slab.alloc(self.pool, size)
+	if kv == nil and not safe then
+		lru_recycle(self)
+	end
+	return slab.alloc(self.pool, size)
+end
 
 local function create_dict(name, size)
 	local addr = C.mmap(nil, size, bor(C.PROT_READ, C.PROT_WRITE), bor(C.MAP_SHARED, C.MAP_ANON), -1, 0)
@@ -94,13 +124,15 @@ local function delete_ll(self, kv)
 	if kv ~= nil then
 		local dict = self.dict
 		local pool = self.pool
-		if kv.bprev == nil then
-			dict.buckets[key2bucket(dict, kv.key, kv.ksize)] = nil
-		else
+		local idx = key2bucket(dict, kv.key, kv.ksize)
+		if kv.bprev ~= nil then
 			kv.bprev.bnext = kv.bnext
 		end
 		if kv.bnext ~= nil then
 			kv.bnext.bprev = kv.bprev
+		end
+		if dict.buckets[idx] == kv then
+			dict.buckets[idx] = kv.bnext
 		end
 		--#--
 		if kv.qprev ~= nil then
@@ -110,10 +142,10 @@ local function delete_ll(self, kv)
 			kv.qnext.qprev = kv.qprev
 		end
 		if dict.qhead == kv then
-			dict.qhead = nil
+			dict.qhead = kv.qnext
 		end
 		if dict.qtail == kv then
-			dict.qtail = nil
+			dict.qtail = kv.qprev
 		end
 		--#--
 		dict.size = dict.size - 1
@@ -131,7 +163,8 @@ local function expire_handler()
 		local count = 0
 		while kv ~= nil and count < 20 do
 			if kv.expire.tv_sec > 0 then
-				if time_le(kv, now) then
+				if time_le(kv.expire, now) then
+					print("remove expired key=" .. ffi.string(kv.key, kv.ksize))
 					delete_ll(dict, kv)
 				end
 			end
@@ -166,20 +199,21 @@ function M.init(cfg)
 end
 
 function M.start_expire_timer()
-	-- add_timer(expire_handler, 1)
+	-- add_timer(expire_handler, 3)
 end
 
 local function find_key(dict, key)
+	local ksize = #key
 	local bucket = 	dict.buckets[key2bucket(dict, key)]
 	while bucket ~= nil do
-		if C.memcmp(bucket.key, key, bucket.ksize) == 0 then
+		if ksize == bucket.ksize and C.memcmp(bucket.key, key, ksize) == 0 then
 			return bucket
 		end
 		bucket = bucket.bnext
 	end
 end
 
-local function write_value(self, bucket, value)
+local function write_value(self, bucket, value, safe)
 	local typ = type(value)
 	if typ == "boolean" then
 		bucket.typ = C.SHDICT_V_BOOL
@@ -197,11 +231,14 @@ local function write_value(self, bucket, value)
 		slab.free(self.pool, bucket.value)
 	end
 	bucket.vsize = #value
-	bucket.value = slab.alloc(self.pool, #value)
+	bucket.value = slab_alloc(self, #value, safe)
+	if bucket.value == nil then
+		return false, "no memory"
+	end
 	ffi.copy(bucket.value, value, #value)
 end
 
-local function rehash(self)
+local function rehash(self, safe)
 	local dict = self.dict
 	local newsize = dict.size + 1
 	if newsize < dict.bsize or newsize >= hsize_sel[hsize_sel_len] then
@@ -215,24 +252,50 @@ local function rehash(self)
 			break
 		end
 	end
+
 	local pool = self.pool
-	local newb = slab.alloc(pool, newbsize * ffi.sizeof("shdict_kv_t*"))
-	ffi.copy(newb, dict.buckets, dict.bsize * ffi.sizeof("shdict_kv_t*"))
+	local newb = slab_alloc(self, newbsize * ffi.sizeof("shdict_kv_t*"), safe)
+	if newb == nil then
+		return false, "no memory"
+	end
+
 	slab.free(pool, dict.buckets)
-	dict.buckets = newb
+	dict.buckets = ffi.cast("shdict_kv_t**", newb)
+	C.memset(dict.buckets, 0, newbsize * ffi.sizeof("shdict_kv_t*"))
 	dict.bsize = newbsize
+
+	local kv = 	dict.qtail
+	while kv ~= nil do
+		local idx = key2bucket(dict, kv.key, kv.ksize)
+		local bucket = dict.buckets[idx]
+		dict.buckets[idx] = kv
+		kv.bprev = nil
+		kv.bnext = nil
+		if bucket ~= nil then
+			bucket.bprev = kv
+			kv.bnext = bucket
+		end
+		kv = kv.qprev
+	end
 end
 
-local function add_key(self, key, exptime)
-	rehash(self)
-	local kv = ffi.cast("shdict_kv_t*", slab.alloc(self.pool, ffi.sizeof("shdict_kv_t")))
+local function add_key(self, key, exptime, safe)
+	rehash(self, safe)
+	local kv = ffi.cast("shdict_kv_t*", slab_alloc(self, ffi.sizeof("shdict_kv_t"), safe))
+	if kv == nil then
+		return false, "no memory"
+	end
 	C.memset(kv, 0, ffi.sizeof("shdict_kv_t"))
 	if exptime and exptime > 0 then
 		rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, kv.expire)
 		kv.expire.tv_sec = kv.expire.tv_sec + math.floor(exptime)
 		kv.expire.tv_nsec = kv.expire.tv_nsec + (exptime%1) * 1000 * 1000 * 1000
 	end
-	kv.key = slab.alloc(self.pool, #key)
+	kv.key = slab_alloc(self, #key, safe)
+	if kv == nil then
+		slab.free(self.pool, kv)
+		return false, "no memory"
+	end
 	ffi.copy(kv.key, key, #key)
 	kv.ksize = #key
 	--#--
@@ -258,35 +321,53 @@ local function add_key(self, key, exptime)
 	return kv
 end
 
-function _M.set(self, key, value, exptime)
+local function set_ll(self, key, value, exptime, op, safe)
+	key = validate_key(key)
+	if key == nil then return false, "key type must be string or number" end
+
 	local dict = self.dict
+
 	pthread.pthread_rwlock_wrlock(dict.lock)
 
 	local kv = find_key(dict, key)
 	if kv == nil then
-		kv = add_key(self, key, exptime)
-	end
-	write_value(self, kv, value)
-
-	pthread.pthread_rwlock_unlock(dict.lock)
-	return true
-end
-
-function _M.add(self, key, value, exptime)
-	local dict = self.dict
-	pthread.pthread_rwlock_wrlock(dict.lock)
-
-	local kv = find_key(dict, key)
-	if kv == nil then
-		kv = add_key(self, key, exptime)
-		write_value(self, kv, value)
+		if op == "replace" or op == "incr" then
+			return false, "not found"
+		end
+		if op == "set" then
+			op = "add"
+		end
+		kv = add_key(self, key, exptime, safe)
+	elseif op == "add" then
+		return false, "exists"
 	end
 
+	if op == "incr" then
+		if kv.typ ~= C.SHDICT_V_NUMBER then
+			return nil, "not a number"
+		end
+		value = tonumber(ffi.string(kv.value, kv.vsize)) + value
+	end
+
+	write_value(self, kv, value, safe)
+
+	if op == "set" or op == "incr" or op == "replace" then
+		if dict.qhead ~= nil and dict.qhead ~= kv then
+			dict.qhead.qprev = kv
+			kv.qnext = dict.qhead
+			dict.qhead = kv
+		end
+	end
+
 	pthread.pthread_rwlock_unlock(dict.lock)
-	return true
+
+	return (op ~= "incr") and true or value
 end
 
 function _M.delete(self, key)
+	key = validate_key(key)
+	if key == nil then return false, "key type must be string or number" end
+
 	local dict = self.dict
 	pthread.pthread_rwlock_wrlock(dict.lock)
 
@@ -296,7 +377,54 @@ function _M.delete(self, key)
 	return true
 end
 
+function _M.set(self, key, value, exptime)
+	if value == nil then
+		return self:delete(key)
+	end
+	return set_ll(self, key, value, exptime, "set")
+end
+
+function _M.safe_set(self, key, value, exptime)
+	return set_ll(self, key, value, exptime, "set", true)
+end
+
+function _M.add(self, key, value, exptime)
+	return set_ll(self, key, value, exptime, "add")
+end
+
+function _M.safe_add(self, key, value, exptime)
+	return set_ll(self, key, value, exptime, "add", true)
+end
+
+function _M.replace(self, key, value, exptime)
+	return set_ll(self, key, value, exptime, "replace")
+end
+
+function _M.incr(self, key, value)
+	return set_ll(self, key, value, nil, "incr")
+end
+
+function _M.flush_all(self)
+	local dict = self.dict
+	local pool = self.pool
+	pthread.pthread_rwlock_wrlock(dict.lock)
+	local kv = 	dict.qtail
+	while kv ~= nil do
+		slab.free(pool, kv.key)
+		slab.free(pool, kv.value)
+		slab.free(pool, kv)
+		kv = kv.qprev
+	end
+	dict.size = 0
+	C.memset(dict.buckets, 0, dict.bsize * ffi.sizeof("shdict_kv_t*"))
+	dict.qhead = nil
+	dict.qtail = nil
+	pthread.pthread_rwlock_unlock(dict.lock)
+end
+
 function _M.get(self, key)
+	key = validate_key(key)
+	if key == nil then return false, "key type must be string or number" end
 	local value
 	local dict = self.dict
 	pthread.pthread_rwlock_rdlock(dict.lock)
@@ -305,7 +433,7 @@ function _M.get(self, key)
 	if kv ~= nil then
 		if kv.expire.tv_sec > 0 then
 			rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, now)
-			if time_le(kv, now) then
+			if time_le(kv.expire, now) then
 				pthread.pthread_rwlock_unlock(dict.lock)
 				self:delete(key)
 				return nil, "expired"
@@ -317,20 +445,19 @@ function _M.get(self, key)
 		elseif kv.typ == C.SHDICT_V_NUMBER then
 			value = tonumber(value)
 		end
-	end
 
-	if dict.qhead ~= kv then
-		if kv.qprev ~= nil then
-			kv.qprev.qnext = kv.qnext
-		end
-		if kv.qnext ~= nil then
-			kv.qnext.qprev = kv.qprev
-		end
-		dict.qhead.qprev = kv
-		kv.qnext = dict.qhead
-		dict.qhead = kv
-		if dict.qtail == kv then
-			dict.qtail = kv.qprev
+		if dict.qhead ~= kv then
+			if kv.qprev ~= nil then
+				kv.qprev.qnext = kv.qnext
+			end
+			if kv.qnext ~= nil then
+				kv.qnext.qprev = kv.qprev
+			end
+			kv.qnext = dict.qhead
+			dict.qhead = kv
+			if dict.qtail == kv then
+				dict.qtail = kv.qprev
+			end
 		end
 	end
 
@@ -354,7 +481,7 @@ function _M.get_keys(self, max_count)
 		kv = kv.qnext
 	end
 	pthread.pthread_rwlock_unlock(dict.lock)
-	return unpack(t)
+	return t
 end
 
 return M

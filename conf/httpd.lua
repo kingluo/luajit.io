@@ -18,11 +18,6 @@ require("ljio.http") {
 	worker_processes = 1,
 	worker_connections = 100,
 
-	ssl = true,
-	ssl_certificate = "/opt/sslkey/server.crt",
-	ssl_certificate_key = "/opt/sslkey/server.key",
-	ssl_ciphers = "RC4:HIGH:!aNULL:!MD5",
-
 	lua_shared_dict = {
 		test = "10m",
 		my_locks = "100k",
@@ -67,6 +62,11 @@ require("ljio.http") {
 		}
 	},
 	{
+		ssl = true,
+		ssl_certificate = "/opt/sslkey/server.crt",
+		ssl_certificate_key = "/opt/sslkey/server.key",
+		ssl_ciphers = "RC4:HIGH:!aNULL:!MD5",
+
 		listen = {
 			{address = "127.0.0.1", port = 80},
 			{address = "127.0.0.1", port = 443, ssl = true},

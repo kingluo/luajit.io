@@ -38,7 +38,7 @@ local function copy_buf(buf, size)
 	for _,v in ipairs(buf) do
 		local typ = type(v)
 		if typ == "table" then
-			size = copy_buf(buf, size)
+			size = copy_buf(v, size)
 		else
 			ffi.copy(buf_in + size, v, #v)
 			size = size + #v

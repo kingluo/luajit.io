@@ -19,8 +19,6 @@ local function master_parse_conf(cfg)
 	if grp == nil then error("invalid group: " .. cfg.group) end
 	cfg.gid = grp.gr_gid
 
-	shdict.init(cfg)
-
 	logging.init(cfg)
 	if cfg.log_import_print then logging.import_print() end
 
@@ -71,6 +69,8 @@ function M.run(cfg, parse_conf, init_worker)
 	end
 
 	master_parse_conf(cfg)
+
+	shdict.init(cfg)
 
 	parse_conf(cfg)
 
