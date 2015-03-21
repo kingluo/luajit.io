@@ -12,5 +12,6 @@ require"ljio.cdef.socket"
 require"ljio.cdef.ssl"
 require"ljio.cdef.syslog"
 require"ljio.cdef.zlib"
+require"ljio.cdef.inotify"
 
 return ffi.C

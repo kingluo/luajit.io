@@ -1,5 +1,9 @@
 -- Copyright (C) Jinhua Luo
 
+local bit = require("bit")
+local C = require("ljio.cdef")
+local inotify = require("ljio.core.inotify")
+
 local strfind = string.find
 local format = string.format
 local strsub = string.sub
@@ -46,20 +50,50 @@ local function luax_compile(str)
 	return loadstring(codes)
 end
 
+local function readfile(path)
+	local f = io.open(path)
+	if f == nil then
+		return nil, 404
+	end
+	local str = f:read('*a')
+	f:close()
+	if str == nil then
+		return nil, 500
+	end
+	return str
+end
+
 local function service(req, rsp)
 	local path = req.url:path()
 	if not luax_cache[path] then
 		local fpath = {(req.lcf.root or "."), "", path}
 		if req.lcf.luax_prefix then fpath[2] = req.lcf.luax_prefix end
 		fpath = table.concat(fpath, "/")
-		local f = io.open(fpath)
-		assert(f)
-		local str = f:read('*a')
-		f:close()
-		assert(str)
+
+		local str, code = readfile(fpath)
+		if code then
+			return rsp:finalize(code)
+		end
+
 		local err
 		luax_cache[path],err = luax_compile(str)
 		if err then print(err) end
+
+		local wd
+		local function filewatch()
+			local str = readfile(fpath)
+			if str then
+				local fn, err = luax_compile(str)
+				print(fn,err)
+				if err == nil then
+					luax_cache[path] = fn
+				end
+			end
+			inotify.remove_watch(wd)
+			inotify.add_watch(fpath, filewatch, C.IN_MODIFY)
+		end
+
+		wd = inotify.add_watch(fpath, filewatch, C.IN_MODIFY)
 	end
 
 	local fn = luax_cache[path]

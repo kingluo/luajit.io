@@ -8,6 +8,7 @@ local signal = require("ljio.core.signal")
 local logging = require("ljio.core.logging")
 local shdict = require("ljio.core.shdict")
 local ssl = require("ljio.socket.ssl")
+local inotify = require("ljio.core.inotify")
 
 local function master_parse_conf(cfg)
 	cfg.worker_processes = cfg.worker_processes or 1
@@ -47,6 +48,8 @@ local function run_worker(cfg, init_worker)
 	signal.init()
 
 	timer.init()
+
+	inotify.init()
 
 	if cfg.working_directory then
 		assert(C.chdir(cfg.working_directory) == 0)
