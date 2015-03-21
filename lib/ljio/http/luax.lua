@@ -79,21 +79,15 @@ local function service(req, rsp)
 		luax_cache[path],err = luax_compile(str)
 		if err then print(err) end
 
-		local wd
-		local function filewatch()
+		inotify.add_watch(fpath, function()
 			local str = readfile(fpath)
 			if str then
 				local fn, err = luax_compile(str)
-				print(fn,err)
 				if err == nil then
 					luax_cache[path] = fn
 				end
 			end
-			inotify.remove_watch(wd)
-			inotify.add_watch(fpath, filewatch, C.IN_MODIFY)
-		end
-
-		wd = inotify.add_watch(fpath, filewatch, C.IN_MODIFY)
+		end, C.IN_MODIFY)
 	end
 
 	local fn = luax_cache[path]
