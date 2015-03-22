@@ -2,7 +2,7 @@
 
 local C = require("ljio.cdef")
 local ffi = require("ffi")
-local tcp = require("ljio.socket.tcp")
+local tcpd = require("ljio.socket.tcpd")
 
 local filter = require("ljio.http.filter")
 local run_next_header_filter = filter.run_next_header_filter
@@ -251,8 +251,8 @@ function http_req_mt.__index.get_post_args(self)
 	return self.post_args
 end
 
-local function http_req_new(method, url, headers, sock)
-	return setmetatable({method = method, url = url,
+local function http_req_new(method, url, version, headers, sock)
+	return setmetatable({method = method, url = url, version = version,
 		headers = headers, sock = sock}, http_req_mt)
 end
 
@@ -799,10 +799,9 @@ local function http_handler(sock)
 	while true do
 		local line,err = sock:receive()
 		if err then print(err); break end
-		local method,url,ver = line:match("(.*) (.*) HTTP/(%d%.%d)")
-		url = parse_url(url)
+		local method, url, version = strmatch(line, "(.*) (.*) HTTP/(%d%.%d)")
 		local headers = receive_headers(sock)
-		local req = http_req_new(method, url, headers, sock)
+		local req = http_req_new(method, parse_url(url), version, headers, sock)
 		local rsp = http_rsp_new(req, sock)
 
 		sock.read_quota = sock.stats.consume + (headers["content-length"] or 0)
@@ -817,7 +816,7 @@ local function http_handler(sock)
 end
 
 local function run(cfg)
-	return tcp(cfg, http_parse_conf, http_handler)
+	return tcpd(cfg, http_parse_conf, http_handler)
 end
 
 return run

@@ -1,5 +1,6 @@
 -- Copyright (C) Jinhua Luo
 
+require("ljio.core.coroutine")
 local C = require("ljio.cdef")
 local ffi = require("ffi")
 local epoll = require("ljio.core.epoll")
