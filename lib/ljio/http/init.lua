@@ -14,12 +14,14 @@ local constants = require("ljio.http.constants")
 local special_rsp = constants.special_rsp
 local status_tbl = constants.status_tbl
 
+local byte = string.byte
+local char = string.char
 local strsub = string.sub
 local strfind = string.find
-local strmatch = string.match
-local strgsub = string.gsub
-local strformat = string.format
-local strlower = string.lower
+local match = string.match
+local gsub = string.gsub
+local lower = string.lower
+local gmatch = string.gmatch
 
 local tinsert = table.insert
 local tsort = table.sort
@@ -34,16 +36,16 @@ local if_modified_tm = ffi.new("struct tm")
 local fstat = ffi.new("struct stat[1]")
 
 local function escape(s)
-    s = string.gsub(s, "([^%w%.%- ])", function(c)
-		return string.format("%%%02X", string.byte(c))
+    s = gsub(s, "([^%w%.%- ])", function(c)
+		return format("%%%02X", byte(c))
 	end)
-    return string.gsub(s, " ", "+")
+    return gsub(s, " ", "+")
 end
 
 local function unescape(s)
-	s = strgsub(s,"+"," ")
-	return (string.gsub(s, "%%(%x%x)", function(hex)
-		return string.char(tonumber(hex, 16))
+	s = gsub(s,"+"," ")
+	return (gsub(s, "%%(%x%x)", function(hex)
+		return char(tonumber(hex, 16))
 	end))
 end
 
@@ -65,7 +67,7 @@ local function parse_url(url)
 	else
 		local segments = {""}
 		local n = 1
-		for segment in string.gmatch(path, "([^/]*)") do
+		for segment in gmatch(path, "([^/]*)") do
 			if segment == ".." then
 				if n > 1 then
 					segments[n] = nil
@@ -92,23 +94,10 @@ end
 
 local function decode_args(query)
 	local uri_args = {}
-	local i = 0
-	local j = 0
-	local match
-	while true do
-		i,j,match = strfind(query, "([^&]+)", j+1)
-		if not match then break end
-		local n = match
-		local v
-		local i = strfind(match,"=",1,true)
-		if i then
-			n = strsub(match,1,i-1)
-			v = strsub(match,i+1)
-		end
 
+	for n, v in gmatch(query, "([^=&]+)=?([^=&]*)&?") do
 		n = unescape(n)
-		if v then v = unescape(v) end
-		v = v or true
+		v = v == "" and true or unescape(v)
 
 		if not uri_args[n] then
 			uri_args[n] = v
@@ -119,28 +108,34 @@ local function decode_args(query)
 			tinsert(uri_args[n], v)
 		end
 	end
+
 	return uri_args
 end
 
-local function receive_headers(sock, read_reqline)
-	local read_header = sock:receiveuntil("\r\n\r\n", {inclusive = true})
+local function read_header(sock, read_reqline)
+	local header_reader = sock:receiveuntil("\r\n\r\n", {inclusive = true})
 	sock:settimeout((g_http_cfg.client_header_timeout or 60) * 1000)
-	local header, err = read_header(g_http_cfg.client_header_buffer_size or 8192)
+	local header, err = header_reader(g_http_cfg.client_header_buffer_size or 8192)
 	if err or strsub(header, #header - 3, #header) ~= "\r\n\r\n" then
 		return nil, err
 	end
 
 	local method, url, version
 	if read_reqline then
-		method, url, version = strmatch(header, "^(.*) (.*) HTTP/(%d%.%d)\r\n")
+		method, url, version = match(header, "^(.*) (.*) HTTP/(%d%.%d)\r\n")
 		if method == nil then
 			return nil, "invalid request line"
 		end
 	end
 
 	local headers = {}
-	for name, value in string.gmatch(header, "([^\r\n]-): ([^\r\n]*)\r\n") do
-		headers[string.lower(name)] = value
+	local n = 0
+	for name, value in gmatch(header, "([^\r\n]-): ([^\r\n]*)\r\n") do
+		headers[lower(name)] = value
+		n = n + 1
+	end
+	if n == 0 then
+		return nil, "invalid request header"
 	end
 
 	return headers, method, url, version
@@ -161,7 +156,7 @@ function http_req_mt.__index.read_chunk(self)
 		return nil, err
 	end
 
-	local size = tonumber(strgsub(line, ";.*", ""), 16)
+	local size = tonumber(gsub(line, ";.*", ""), 16)
 	if not size then
 		sock.read_quota = read_quota
 		return nil, "invalid chunk size"
@@ -179,7 +174,7 @@ function http_req_mt.__index.read_chunk(self)
 		return chunk
 	end
 
-	receive_headers(sock)
+	read_header(sock)
 	sock.read_quota = read_quota
 end
 
@@ -260,7 +255,7 @@ function http_rsp_mt.__index.get_sid(self)
     local cookie = self.req.headers["cookie"]
 	local sid
 	if cookie then
-		sid = string.match(cookie, "SESSIONID=([^;%s]+)")
+		sid = match(cookie, "SESSIONID=([^;%s]+)")
 	else
 		sid = tostring(os.time()) .. sid_pool
 		sid_pool = sid_pool + 1
@@ -414,7 +409,7 @@ function http_rsp_mt.__index.try_file(self, path, eof, absolute)
 	local req = self.req
 	local lcf = req.lcf or req.srvcf
 	local path = path or req.url.path
-	local ext = string.match(path, "%.([^%.]+)$")
+	local ext = match(path, "%.([^%.]+)$")
 	if self.headers["content-type"] == nil then
 		self.headers["content-type"] = lcf.mime_types[ext] or "application/octet-stream"
 	end
@@ -461,8 +456,8 @@ local function http_parse_conf(cfg)
 	local data = types:read("*a")
 	types:close()
 	assert(data)
-	for typ,exts in string.gmatch(data, "([^;%s]+)%s+([a-zA-Z0-9%s]+);") do
-		for ext in string.gmatch(exts, "%w+") do
+	for typ,exts in gmatch(data, "([^;%s]+)%s+([a-zA-Z0-9%s]+);") do
+		for ext in gmatch(exts, "%w+") do
 			cfg.mime_types[ext] = typ
 		end
 	end
@@ -485,7 +480,7 @@ local function http_parse_conf(cfg)
 				shash.prefix_hash[location[2]] = location
 			else
 				if location[1] == "~*" then
-					location[2] = strlower(location[2])
+					location[2] = lower(location[2])
 				end
 				tinsert(shash.pattern, location)
 			end
@@ -707,9 +702,9 @@ local function handle_http_request(req, rsp)
 			for _,slcf in ipairs(shash.pattern) do
 				local modifier,pat = slcf[1],slcf[2]
 				if modifier == "~" then
-					req.match_data = match_aux(strmatch(path, pat))
+					req.match_data = match_aux(match(path, pat))
 				elseif modifier == "~*" then
-					req.match_data = match_aux(strmatch(strlower(path), pat))
+					req.match_data = match_aux(match(lower(path), pat))
 				elseif modifier == "f"  then
 					local checker = coroutine.spawn(pat, nil, req)
 					req.match_data = match_aux(select(2, coroutine.wait(checker)))
@@ -772,7 +767,7 @@ end
 
 local function http_handler(sock)
 	while true do
-		local headers, method, url, version = receive_headers(sock, true)
+		local headers, method, url, version = read_header(sock, true)
 
 		if headers == nil then
 			local err = method
