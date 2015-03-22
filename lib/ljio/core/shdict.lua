@@ -434,8 +434,8 @@ function _M.get(self, key)
 		if kv.expire.tv_sec > 0 then
 			rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, now)
 			if time_le(kv.expire, now) then
+				delete_ll(self, kv)
 				pthread.pthread_rwlock_unlock(dict.lock)
-				self:delete(key)
 				return nil, "expired"
 			end
 		end

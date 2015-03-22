@@ -26,6 +26,12 @@ local tsort = table.sort
 local tconcat = table.concat
 
 local g_http_cfg
+local http_req_mt = {__index={}}
+local http_rsp_mt = {__index = {bufpool = create_bufpool(100)}}
+local sid_pool = 1
+local v_time_t = ffi.new("time_t[1]")
+local if_modified_tm = ffi.new("struct tm")
+local fstat = ffi.new("struct stat[1]")
 
 local function escape(s)
     s = string.gsub(s, "([^%w%.%- ])", function(c)
@@ -45,7 +51,7 @@ end
 -- <authority> ::= <userinfo>@<host>:<port>
 -- <userinfo> ::= <user>[:<password>]
 -- <path> :: = {<segment>/}<segment>
-function parse_url(url)
+local function parse_url(url)
 	local i, j, path
 	local parsed = {}
 
@@ -139,8 +145,6 @@ local function receive_headers(sock, read_reqline)
 
 	return headers, method, url, version
 end
-
-local http_req_mt = {__index={}}
 
 function http_req_mt.__index.read_chunk(self)
 	if self.headers["transfer-encoding"] ~= "chunked" then
@@ -251,9 +255,6 @@ local function http_req_new(method, url, version, headers, sock)
 		headers = headers, sock = sock}, http_req_mt)
 end
 
-local http_rsp_mt = {__index = {bufpool = create_bufpool(100)}}
-
-local sid_pool = 1
 function http_rsp_mt.__index.get_sid(self)
 	if self.sid then return self.sid end
     local cookie = self.req.headers["cookie"]
@@ -385,10 +386,6 @@ function http_rsp_mt.__index.redirect(self, uri, status)
 	self.status = status or 302
 	return coroutine.exit(true)
 end
-
-local v_time_t = ffi.new("time_t[1]")
-local if_modified_tm = ffi.new("struct tm")
-local fstat = ffi.new("struct stat[1]")
 
 local function check_if_modified(rsp)
 	local req = rsp.req
@@ -776,6 +773,7 @@ end
 local function http_handler(sock)
 	while true do
 		local headers, method, url, version = receive_headers(sock, true)
+
 		if headers == nil then
 			local err = method
 			if err == "closed" then
