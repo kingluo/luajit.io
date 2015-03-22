@@ -3,9 +3,6 @@
 local C = require("ljio.cdef")
 local ffi = require("ffi")
 local tcp = require("ljio.socket.tcp")
-local URI = require("uri")
-local uri_encode = require("uri._util").uri_encode
-local uri_decode = require("uri._util").uri_decode
 
 local filter = require("ljio.http.filter")
 local run_next_header_filter = filter.run_next_header_filter
@@ -25,9 +22,61 @@ local tinsert = table.insert
 local tsort = table.sort
 local tconcat = table.concat
 
+local function escape(s)
+    s = string.gsub(s, "([^%w%.%- ])", function(c)
+		return string.format("%%%02X", string.byte(c))
+	end)
+    return string.gsub(s, " ", "+")
+end
+
 local function unescape(s)
 	s = strgsub(s,"+"," ")
-	return uri_decode(s)
+	return (string.gsub(s, "%%(%x%x)", function(hex)
+		return string.char(tonumber(hex, 16))
+	end))
+end
+
+-- <url> ::= <scheme>://<authority>/<path>?<query>#<fragment>
+-- <authority> ::= <userinfo>@<host>:<port>
+-- <userinfo> ::= <user>[:<password>]
+-- <path> :: = {<segment>/}<segment>
+function parse_url(url)
+	local i, j, path
+	local parsed = {}
+
+	i, j, parsed.scheme = strfind(url, "^([^:]+):")
+
+	i, j, parsed.authority = strfind(url, "^//([^/]*)", j and j + 1 or 1)
+
+	i, j, path = strfind(url, "^([^%?]*)", j and j + 1 or 1)
+	if path == nil or path == "" then
+		parsed.path = "/"
+	else
+		local segments = {""}
+		local n = 1
+		for segment in string.gmatch(path, "([^/]*)") do
+			if segment == ".." then
+				if n > 1 then
+					segments[n] = nil
+				end
+			elseif segment ~= "." and segment ~= "" then
+				tinsert(segments, segment)
+				n = n + 1
+			end
+		end
+		path = tconcat(segments, "/")
+		if path == "" then
+			parsed.path = "/"
+		else
+			parsed.path = unescape(path)
+		end
+	end
+
+	i, j, parsed.query = strfind(url, "^%?([^#])*", j and j + 1 or 1)
+
+	i, j, parsed.fragment = strfind(url, "^#(.*)$", j and j + 1 or 1)
+
+	return parsed
 end
 
 local function decode_args(query)
@@ -179,7 +228,7 @@ end
 
 function http_req_mt.__index.get_uri_args(self)
 	if not self.uri_args then
-		self.uri_args = decode_args(self.url:query())
+		self.uri_args = decode_args(self.url.query)
 	end
 	return self.uri_args
 end
@@ -219,7 +268,7 @@ function http_rsp_mt.__index.get_sid(self)
 	else
 		sid = tostring(os.time()) .. sid_pool
 		sid_pool = sid_pool + 1
-		self.headers['Set-Cookie'] = 'SESSIONID=' .. sid .. '; path=/'
+		self.headers['Set-Cookie'] = 'SESSIONID=' .. sid .. '; path=/ ; HttpOnly'
 	end
 	self.sid = sid
     return sid
@@ -307,17 +356,17 @@ end
 function http_rsp_mt.__index.encode_args(self, args)
 	local t = {}
 	for k,v in pairs(args) do
-		k = uri_encode(k)
+		k = escape(k)
 		if type(v) == "table" then
 			for _,v2 in ipairs(v) do
 				if type(v2) == "string" then
-					v2 = uri_encode(v2)
+					v2 = escape(v2)
 				end
 				tinsert(t, k .. "=" .. v2)
 			end
 		else
 			if type(v) == "string" then
-				v = uri_encode(v)
+				v = escape(v)
 			end
 			tinsert(t, k .. "=" .. v)
 		end
@@ -342,8 +391,8 @@ function http_rsp_mt.__index.exec(self, uri, args)
 		self.uri_args = args
 		args = self:encode_args(args)
 	end
-	self.req.url:path(path)
-	self.req.url:query(args)
+	self.req.url.path = path
+	self.req.url.query = args
 	self.exec = true
 	return coroutine.exit(true)
 end
@@ -373,7 +422,7 @@ local fstat = ffi.new("struct stat[1]")
 local function check_if_modified(rsp)
 	local req = rsp.req
 	local lcf = req.lcf or req.srvcf
-	local path = req.url:path()
+	local path = req.url.path
 	path = (lcf.root or ".") .. '/' .. path
 	if C.syscall(C.SYS_stat, ffi.cast("const char*", path), fstat) == 0 then
 		local mtime = fstat[0].st_mtime
@@ -396,7 +445,7 @@ function http_rsp_mt.__index.try_file(self, path, eof, absolute)
 	if eof == nil then eof = true end
 	local req = self.req
 	local lcf = req.lcf or req.srvcf
-	local path = path or req.url:path()
+	local path = path or req.url.path
 	local ext = string.match(path, "%.([^%.]+)$")
 	if self.headers["content-type"] == nil then
 		self.headers["content-type"] = lcf.mime_types[ext] or "application/octet-stream"
@@ -663,7 +712,7 @@ local function handle_http_request(req, rsp)
 	local location
 	if match_srv then
 		local shash = match_srv.location_hash
-		local path = req.url:path()
+		local path = req.url.path
 		local pathlen = #path
 		local match_done = false
 
@@ -746,21 +795,14 @@ local function handle_http_request(req, rsp)
 	return rsp:try_file()
 end
 
-local nodelay = ffi.new("int[1]", 1)
 local function http_handler(sock)
-	assert(C.setsockopt(sock.fd, C.IPPROTO_TCP, C.TCP_NODELAY, ffi.cast("void*", nodelay), ffi.sizeof("int")) == 0)
 	while true do
 		local line,err = sock:receive()
 		if err then print(err); break end
 		local method,url,ver = line:match("(.*) (.*) HTTP/(%d%.%d)")
-		local uri = URI:new(url)
-		if uri._path == "" then
-			uri._path = "/"
-		else
-			uri._path = unescape(uri._path)
-		end
+		url = parse_url(url)
 		local headers = receive_headers(sock)
-		local req = http_req_new(method, uri, headers, sock)
+		local req = http_req_new(method, url, headers, sock)
 		local rsp = http_rsp_new(req, sock)
 
 		sock.read_quota = sock.stats.consume + (headers["content-length"] or 0)

@@ -64,7 +64,7 @@ local function readfile(path)
 end
 
 local function service(req, rsp)
-	local path = req.url:path()
+	local path = req.url.path
 	if not luax_cache[path] then
 		local fpath = {(req.lcf.root or "."), "", path}
 		if req.lcf.luax_prefix then fpath[2] = req.lcf.luax_prefix end

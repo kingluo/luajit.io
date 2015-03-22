@@ -565,11 +565,16 @@ function tcp_mt.__index.sendfile(self, path, offset, size)
 	return sent, err
 end
 
-local function create_tcp_socket(self, family)
+local nodelay = ffi.new("int[1]", 1)
+
+local function create_tcp_socket(self)
 	assert(self.fd == -1)
 	local fd = C.socket(self.family, C.SOCKET_STREAM, 0)
 	assert(fd > 0)
 	utils.set_nonblock(fd)
+	if self.family == C.AF_INET then
+		assert(C.setsockopt(fd, C.IPPROTO_TCP, C.TCP_NODELAY, ffi.cast("void*", nodelay), ffi.sizeof("int")) == 0)
+	end
 	self.fd = fd
 	self.ev.fd = fd
 	self.guard.fd = fd

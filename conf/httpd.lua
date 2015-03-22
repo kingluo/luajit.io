@@ -80,7 +80,7 @@ require("ljio.http") {
 				"f",
 				function(req)
 					if string.find(req.headers["user-agent"], "curl", 1, true) then
-						return string.match(req.url:path(), "^/(test/[a-zA-Z0-9_%-/]*)")
+						return string.match(req.url.path, "^/(test/[a-zA-Z0-9_%-/]*)")
 					end
 				end,
 				function(req, rsp)
