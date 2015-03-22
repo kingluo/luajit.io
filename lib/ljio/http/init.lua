@@ -49,40 +49,43 @@ local function unescape(s)
 	end))
 end
 
--- <url> ::= <scheme>://<authority>/<path>?<query>#<fragment>
--- <authority> ::= <userinfo>@<host>:<port>
--- <userinfo> ::= <user>[:<password>]
--- <path> :: = {<segment>/}<segment>
 local function parse_url(url)
-	local i, j, path
 	local parsed = {}
 
-	i, j, parsed.scheme = strfind(url, "^([^:]+):")
+	local i, j, path = strfind(url, "^([^%?]*)")
 
-	i, j, parsed.authority = strfind(url, "^//([^/]*)", j and j + 1 or 1)
-
-	i, j, path = strfind(url, "^([^%?]*)", j and j + 1 or 1)
 	if path == nil or path == "" then
 		parsed.path = "/"
 	else
 		local segments = {""}
 		local n = 1
-		for segment in gmatch(path, "([^/]*)") do
+		local last_slash = false
+		if strsub(path, #path, #path) == "/" then
+			last_slash = true
+		end
+
+		for segment in gmatch(path, "([^/]+)") do
 			if segment == ".." then
 				if n > 1 then
 					segments[n] = nil
+					n = n - 1
 				end
-			elseif segment ~= "." and segment ~= "" then
+			elseif segment ~= "." then
 				tinsert(segments, segment)
 				n = n + 1
 			end
 		end
-		path = tconcat(segments, "/")
-		if path == "" then
-			parsed.path = "/"
+
+		if n == 1 then
+			path = "/"
 		else
-			parsed.path = unescape(path)
+			if last_slash then
+				tinsert(segments, "")
+			end
+			path = unescape(tconcat(segments, "/"))
 		end
+
+		parsed.path = path
 	end
 
 	i, j, parsed.query = strfind(url, "^%?([^#])*", j and j + 1 or 1)
