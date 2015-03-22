@@ -24,6 +24,17 @@ local pools = {}
 local YIELD_R = "co_r"
 local YIELD_W = "co_w"
 
+local READ_CHUNK_SIZE = 4096
+local MIN_SPACE = READ_CHUNK_SIZE / 4
+local eol1 = string.byte("\r")
+local eol2 = string.byte("\n")
+ffi.cdef[[ struct buf_gc {void*p;}; ]]
+local buf_gc = ffi.metatype("struct buf_gc", {__gc=function(g) C.free(g.p) end})
+
+local MAX_IOVCNT = 64
+
+local nodelay = ffi.new("int[1]", 1)
+
 local function sock_io_handler(ev, events)
 	local sock = ev.sock
 	assert(sock)
@@ -134,13 +145,6 @@ end
 function tcp_mt.__index.settimeout(self, msec)
 	self.timeout = msec / 1000
 end
-
-local READ_CHUNK_SIZE = 4096
-local MIN_SPACE = READ_CHUNK_SIZE / 4
-local eol1 = string.byte("\r")
-local eol2 = string.byte("\n")
-ffi.cdef[[ struct buf_gc {void*p;}; ]]
-local buf_gc = ffi.metatype("struct buf_gc", {__gc=function(g) C.free(g.p) end})
 
 local function receive_ll(self, pattern)
 	if not self.rbuf then
@@ -375,8 +379,6 @@ function tcp_mt.__index.receiveuntil(self, pattern, options)
 	end
 end
 
-local MAX_IOVCNT = 64
-
 local function flatten_table(self, data, idx, bytes)
 	idx = idx or 0
 	bytes = bytes or 0
@@ -560,8 +562,6 @@ function tcp_mt.__index.sendfile(self, path, offset, size)
 
 	return sent, err
 end
-
-local nodelay = ffi.new("int[1]", 1)
 
 local function create_tcp_socket(self)
 	assert(self.fd == -1)
