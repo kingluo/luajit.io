@@ -36,6 +36,11 @@ require("ljio.http") {
 
 	types = "mime.types",
 
+	client_header_timeout = 60,
+	client_header_buffer_size = 1024,
+	client_body_timeout = 60,
+	client_body_buffer_size = 8*1024,
+
 	-- Server blocks
 	-- Refer to http://nginx.org/en/docs/http/request_processing.html
 	{

@@ -1,21 +1,10 @@
 -- Copyright (C) Jinhua Luo
 
 local http_time = require("ljio.core.utils").http_time
+local constants = require("ljio.http.constants")
 local tinsert = table.insert
 
 local M = {}
-
-local status_tbl = {
-	[200] = "HTTP/1.1 200 OK\r\n";
-	[302] = "HTTP/1.1 302 Found\r\n";
-	[304] = "HTTP/1.1 304 Not Modified\r\n";
-	[400] = "HTTP/1.1 400 Bad Request\r\n";
-	[403] = "HTTP/1.1 403 Forbidden\r\n";
-	[404] = "HTTP/1.1 404 Not Found\r\n";
-	[500] = "HTTP/1.1 500 Internal Server Error\r\n";
-	[501] = "HTTP/1.1 501 Not Implemented\r\n";
-	[503] = "HTTP/1.1 503 Service Unavailable\r\n";
-}
 
 local postpone_output = 1460
 local eol = "\r\n"
@@ -24,7 +13,7 @@ local sep = ": "
 function M.header_filter(rsp)
 	local lcf = rsp.req.lcf or rsp.req.srvcf
 
-	local status = status_tbl[rsp.status or 200]
+	local status = constants.status_tbl[rsp.status or 200]
 	assert(status)
 	local ret,err = rsp.sock:send(status)
 	if err then return nil,err end

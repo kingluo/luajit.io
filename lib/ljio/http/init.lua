@@ -10,6 +10,9 @@ local run_next_body_filter = filter.run_next_body_filter
 
 local create_bufpool = require("ljio.http.buf")
 local http_time = require("ljio.core.utils").http_time
+local constants = require("ljio.http.constants")
+local special_rsp = constants.special_rsp
+local status_tbl = constants.status_tbl
 
 local strsub = string.sub
 local strfind = string.find
@@ -21,6 +24,8 @@ local strlower = string.lower
 local tinsert = table.insert
 local tsort = table.sort
 local tconcat = table.concat
+
+local g_http_cfg
 
 local function escape(s)
     s = string.gsub(s, "([^%w%.%- ])", function(c)
@@ -111,38 +116,28 @@ local function decode_args(query)
 	return uri_args
 end
 
-local function receive_headers(sock, headers)
-	local line, name, value, err
-	headers = headers or {}
-
-	-- get first line
-	line, err = sock:receive()
-	if err then return nil, err end
-
-	-- headers go until a blank line is found
-	while line ~= "" do
-		-- get field-name and value
-		name, value = strmatch(line, "^(.-):%s*(.*)")
-		if not (name and value) then return nil, "malformed reponse headers" end
-		name = string.lower(name)
-
-		-- get next line (value might be folded)
-		line, err = sock:receive()
-		if err then return nil, err end
-
-		-- unfold any folded values
-		while strfind(line, "^%s") do
-			value = value .. line
-			line = sock:receive()
-			if err then return nil, err end
-		end
-
-		-- save pair in table
-		if headers[name] then headers[name] = headers[name] .. ", " .. value
-		else headers[name] = value end
+local function receive_headers(sock, read_reqline)
+	local read_header = sock:receiveuntil("\r\n\r\n", {inclusive = true})
+	sock:settimeout((g_http_cfg.client_header_timeout or 60) * 1000)
+	local header, err = read_header(g_http_cfg.client_header_buffer_size or 8192)
+	if err or strsub(header, #header - 3, #header) ~= "\r\n\r\n" then
+		return nil, err
 	end
 
-	return headers
+	local method, url, version
+	if read_reqline then
+		method, url, version = strmatch(header, "^(.*) (.*) HTTP/(%d%.%d)\r\n")
+		if method == nil then
+			return nil, "invalid request line"
+		end
+	end
+
+	local headers = {}
+	for name, value in string.gmatch(header, "([^\r\n]-): ([^\r\n]*)\r\n") do
+		headers[string.lower(name)] = value
+	end
+
+	return headers, method, url, version
 end
 
 local http_req_mt = {__index={}}
@@ -180,7 +175,7 @@ function http_req_mt.__index.read_chunk(self)
 		return chunk
 	end
 
-	receive_headers(sock, self.headers)
+	receive_headers(sock)
 	sock.read_quota = read_quota
 end
 
@@ -304,30 +299,6 @@ function http_rsp_mt.__index.flush(self)
 	buf.flush = true
 	return run_next_body_filter(self, buf)
 end
-
-local special_rsp_template = [[
-<html>
-<head><title>$status</title></head>
-<body bgcolor="white">
-<center><h1>$status</h1></center>
-<hr><center>luajit.io</center>
-</body>
-</html>
-]]
-
-local function content_aux(status)
-	return string.gsub(special_rsp_template, "%$(%w+)", {status=status})
-end
-
-local special_rsp = {
-	[302] = content_aux("302 Found");
-	[400] = content_aux("400 Bad Request");
-	[403] = content_aux("403 Forbidden");
-	[404] = content_aux("404 Not Found");
-	[500] = content_aux("500 Internal Server Error");
-	[501] = content_aux("501 Not Implemented");
-	[503] = content_aux("503 Service Unavailable");
-}
 
 function http_rsp_mt.__index.finalize(self, status)
 	if self.finalized then return true end
@@ -475,8 +446,6 @@ local function http_rsp_new(req, sock)
 end
 
 --#--
-
-local g_http_cfg
 
 local function more_than(a,b)
 	return a > b
@@ -795,12 +764,30 @@ local function handle_http_request(req, rsp)
 	return rsp:try_file()
 end
 
+local function finalize_conn(sock, status)
+	local body = special_rsp[status]
+	sock:send(status_tbl[status],
+		"server: luajit.io\r\ncontent-type: text/html\r\n",
+		"content-length: " .. #body .. "\r\n",
+		"date: " .. http_time() .. "\r\nconnection: close\r\n\r\n",
+		body)
+end
+
 local function http_handler(sock)
 	while true do
-		local line,err = sock:receive()
-		if err then print(err); break end
-		local method, url, version = strmatch(line, "(.*) (.*) HTTP/(%d%.%d)")
-		local headers = receive_headers(sock)
+		local headers, method, url, version = receive_headers(sock, true)
+		if headers == nil then
+			local err = method
+			if err == "closed" then
+				break
+			end
+			local status = 400
+			if err == "timeout" then
+				status = 408
+			end
+			return finalize_conn(sock, status)
+		end
+
 		local req = http_req_new(method, parse_url(url), version, headers, sock)
 		local rsp = http_rsp_new(req, sock)
 
@@ -809,7 +796,6 @@ local function http_handler(sock)
 		sock.read_quota = nil
 
 		if headers["connection"] == "close" then
-			sock:close()
 			break
 		end
 	end
