@@ -15,8 +15,8 @@ require("ljio.http") {
 	group = "nogroup",
 	working_directory = conf_prefix .. "../",
 	daemon = false,
-	worker_processes = "auto",
-	worker_connections = 100,
+	worker_processes = 1,
+	worker_connections = 512,
 
 	lua_shared_dict = {
 		test = "10m",

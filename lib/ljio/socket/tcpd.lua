@@ -118,6 +118,10 @@ local function tcp_parse_conf(cfg)
 	cfg.srv_tbl = srv_tbl
 	cfg.listen_fdlist = g_listen_sk_tbl
 
+	if cfg.worker_connections == nil then
+		cfg.worker_connections = 512
+	end
+
 	g_tcp_cfg = cfg
 end
 
