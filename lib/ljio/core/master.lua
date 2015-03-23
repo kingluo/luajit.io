@@ -82,8 +82,6 @@ function M.run(cfg, parse_conf, init_worker)
 
 	master_parse_conf(cfg)
 
-	shdict.init(cfg)
-
 	parse_conf(cfg)
 
 	if cfg.daemon then
@@ -236,7 +234,7 @@ function M.run(cfg, parse_conf, init_worker)
 
 	timer.init()
 
-	shdict.start_expire_timer()
+	shdict.init(cfg)
 
 	ssl.init(cfg)
 

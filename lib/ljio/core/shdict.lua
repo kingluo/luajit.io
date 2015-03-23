@@ -62,6 +62,9 @@ local hsize_sel = {3, 13, 23, 53, 97, 193, 389, 769, 1543, 3079, 6151, 12289, 24
 	12582917, 25165843}
 local hsize_sel_len = #hsize_sel
 
+local expire_timer
+local EXPIRE_INTERVAL = 3
+
 local function validate_key(key)
 	local typ = type(key)
 	if typ == "number" then
@@ -173,7 +176,7 @@ local function expire_handler()
 		end
 		pthread.pthread_rwlock_unlock(dict.dict.lock)
 	end
-	add_timer(expire_handler, 1)
+	add_timer(expire_handler, EXPIRE_INTERVAL)
 end
 
 function M.init(cfg)
@@ -195,11 +198,10 @@ function M.init(cfg)
 			end
 			create_dict(name, size)
 		end
+		if expire_timer == nil then
+			expire_timer = add_timer(expire_handler, EXPIRE_INTERVAL)
+		end
 	end
-end
-
-function M.start_expire_timer()
-	-- add_timer(expire_handler, 3)
 end
 
 local function find_key(dict, key)

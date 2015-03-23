@@ -102,16 +102,16 @@ local function init()
 	end
 	g_timer_fd = C.timerfd_create(C.CLOCK_MONOTONIC, 0)
 	assert(g_timer_fd > 0)
-	g_timer_ev = {}
-	g_timer_ev.fd = g_timer_fd
-	g_timer_ev.handler = function()
-		print("timer fired pid=" .. C.getpid())
+
+	g_timer_ev = {fd = g_timer_fd, handler = function()
+		-- print("timer fired pid=" .. C.getpid())
 		timerfd_settime(g_timer_fd, 0, 0)
 		while process_all_timers() > 0 do end
 		local sec,nsec = get_next_interval()
 		if sec then timerfd_settime(g_timer_fd, sec, nsec) end
-	end
+	end}
 	epoll.add_event(g_timer_ev, C.EPOLLIN)
+
 	g_timer_rbtree = rbtree.new(timer_lt)
 end
 
