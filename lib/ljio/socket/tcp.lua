@@ -196,10 +196,11 @@ local function receive_ll(self, pattern)
 					return str
 				end
 			elseif typ == "function" then
+				local cp = rbuf.cp2
 				local r,err = pattern(self.rbuf, avaliable)
-				self.stats.consume = self.stats.consume + (rbuf.cp2 - rbuf.cp1)
-				rbuf.cp1 = rbuf.cp2
+				self.stats.consume = self.stats.consume + (rbuf.cp2 - cp)
 				if r or err then
+					rbuf.cp1 = rbuf.cp2
 					return r,err
 				end
 			elseif pattern == "*a" then
@@ -341,6 +342,7 @@ function tcp_mt.__index.receiveuntil(self, pattern, options)
 		end
 
 		return self:receive(function(rbuf, avaliable)
+			local cp = rbuf.cp2
 			for i = 1,avaliable do
 				local c = ffi.string(rbuf.cp2, 1)
 				rbuf.cp2 = rbuf.cp2 + 1
@@ -349,7 +351,7 @@ function tcp_mt.__index.receiveuntil(self, pattern, options)
 				elseif node == dfa.last then break end
 			end
 
-			data = data .. ffi.string(rbuf.cp1, rbuf.cp2 - rbuf.cp1)
+			data = data .. ffi.string(cp, rbuf.cp2 - cp)
 
 			local r
 			local n_pat = node[3]

@@ -27,6 +27,11 @@ local tinsert = table.insert
 local tsort = table.sort
 local tconcat = table.concat
 
+local space = byte(" ")
+local colon = byte(":")
+local eol1 = byte("\r")
+local eol2 = byte("\n")
+
 local g_http_cfg
 local http_req_mt = {__index={}}
 local http_rsp_mt = {__index = {bufpool = create_bufpool(100)}}
@@ -116,29 +121,79 @@ local function decode_args(query)
 end
 
 local function read_header(sock, read_reqline)
-	local header_reader = sock:receiveuntil("\r\n\r\n", {inclusive = true})
-	sock:settimeout((g_http_cfg.client_header_timeout or 60) * 1000)
-	local header, err = header_reader(g_http_cfg.client_header_buffer_size or 8192)
-	if err or strsub(header, #header - 3, #header) ~= "\r\n\r\n" then
-		return nil, err
-	end
-
 	local method, url, version
-	if read_reqline then
-		method, url, version = match(header, "^(.*) (.*) HTTP/(%d%.%d)\r\n")
-		if method == nil then
-			return nil, "invalid request line"
-		end
-	end
+	local phase = read_reqline and "line" or "header"
+	local quota = g_http_cfg.client_header_buffer_size or 8192
+	sock:settimeout((g_http_cfg.client_header_timeout or 60) * 1000)
 
-	local headers = {}
-	local n = 0
-	for name, value in gmatch(header, "([^\r\n]-): ([^\r\n]*)\r\n") do
-		headers[lower(name)] = value
-		n = n + 1
-	end
-	if n == 0 then
-		return nil, "invalid request header"
+	local headers
+	local inline = 0
+	local colon_offset
+	local ret, err = sock:receive(function(rbuf, avaliable)
+		for i = 1,avaliable do
+			local c = rbuf.cp2[0]
+
+			if inline == 0 then
+				if c == eol1 then
+					inline = 1
+				end
+			elseif inline == 1 then
+				inline = c == eol2 and 2 or 0
+			end
+
+			if phase == "header" then
+				if c == colon then
+					colon_offset = rbuf.cp2 - rbuf.cp1
+				end
+			end
+
+			if inline == 2 then
+				inline = 0
+				if rbuf.cp1 == rbuf.cp2 - 1 then
+					rbuf.cp2 = rbuf.cp2 + 1
+					return nil, "done"
+				end
+				if phase == "line" then
+					local ptr = ffi.cast("char*", C.memchr(rbuf.cp1, space, rbuf.cp2 - rbuf.cp1 - 1))
+					if ptr == nil then
+						return nil, "malform"
+					end
+					method = ffi.string(rbuf.cp1, ptr - rbuf.cp1)
+					rbuf.cp1 = ptr + 1
+					ptr = ffi.cast("char*", C.memchr(rbuf.cp1, space, rbuf.cp2 - rbuf.cp1 - 1))
+					if ptr == nil then
+						return nil, "malform"
+					end
+					url = ffi.string(rbuf.cp1, ptr - rbuf.cp1)
+					version = ffi.string(ptr + 6, rbuf.cp2 - ptr - 5)
+					rbuf.cp1 = rbuf.cp2 + 1
+					phase = "header"
+				elseif phase == "header" then
+					if colon_offset == 0 then
+						return nil, "malform"
+					end
+					local ptr = rbuf.cp1 + colon_offset
+					local name = ffi.string(rbuf.cp1, ptr - rbuf.cp1)
+					local value = ffi.string(ptr + 2, rbuf.cp2 - ptr - 3)
+					if headers == nil then
+						headers = {}
+					end
+					colon_offset = 0
+					headers[lower(name)] = value
+					rbuf.cp1 = rbuf.cp2 + 1
+				end
+			end
+
+			rbuf.cp2 = rbuf.cp2 + 1
+			quota = quota - 1
+			if quota == 0 then
+				return nil, "no quota"
+			end
+		end
+	end)
+
+	if err and err ~= "done" then
+		method = err
 	end
 
 	return headers, method, url, version
