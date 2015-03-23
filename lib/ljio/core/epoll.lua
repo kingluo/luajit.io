@@ -75,9 +75,9 @@ local function run(expect_events)
 			end
 		end
 
-		print("# pid=" .. C.getpid() .. " epoll_wait enter...")
+		-- print("# pid=" .. C.getpid() .. " epoll_wait enter...")
 		local n = C.epoll_wait(g_epoll_fd, ev_set, MAX_EPOLL_EVENT, wait_timeout)
-		print("# pid=" .. C.getpid() .. " epoll_wait exit...")
+		-- print("# pid=" .. C.getpid() .. " epoll_wait exit...")
 
 		if n == -1 then return n_events, utils.strerror() end
 

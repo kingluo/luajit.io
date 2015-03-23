@@ -790,7 +790,6 @@ local function handle_http_request(req, rsp)
 			local ret
 			ret,fn = pcall(require, fn)
 			if ret == false then
-			print(fn)
 				return rsp:finalize(500)
 			end
 		end

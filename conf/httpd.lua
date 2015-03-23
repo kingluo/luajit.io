@@ -80,7 +80,7 @@ require("ljio.http") {
 		root = "/srv/foobar",
 		default_type = 'text/plain',
 		location = {
-			{"=", "/hello", function(req, rsp) rsp:say("hello world!") end},
+			{"=", "/hello", function(req, rsp) return rsp:say("hello world!") end},
 			{
 				"f",
 				function(req)
