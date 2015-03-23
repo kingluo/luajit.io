@@ -62,40 +62,41 @@ local function parse_url(url)
 	if path == nil or path == "" then
 		parsed.path = "/"
 	else
-		local segments = {""}
-		local n = 1
-		local last_slash = false
-		if strsub(path, #path, #path) == "/" then
-			last_slash = true
-		end
+		if strfind(url, "/[%./]+") then
+			local segments = {""}
+			local n = 1
+			local last_slash = strsub(path, #path, #path) == "/"
 
-		for segment in gmatch(path, "([^/]+)") do
-			if segment == ".." then
-				if n > 1 then
-					segments[n] = nil
-					n = n - 1
+			for segment in gmatch(path, "([^/]+)") do
+				if segment == ".." then
+					if n > 1 then
+						segments[n] = nil
+						n = n - 1
+					end
+				elseif segment ~= "." then
+					n = n + 1
+					segments[n] = segment
 				end
-			elseif segment ~= "." then
-				tinsert(segments, segment)
-				n = n + 1
+			end
+
+			if n == 1 then
+				path = "/"
+			else
+				if last_slash then
+					tinsert(segments, "")
+				end
+				path = tconcat(segments, "/")
 			end
 		end
 
-		if n == 1 then
-			path = "/"
-		else
-			if last_slash then
-				tinsert(segments, "")
-			end
-			path = unescape(tconcat(segments, "/"))
+		if strfind(path, "[%+%%]") then
+			path = unescape(path)
 		end
 
 		parsed.path = path
 	end
 
-	i, j, parsed.query = strfind(url, "^%?([^#])*", j and j + 1 or 1)
-
-	i, j, parsed.fragment = strfind(url, "^#(.*)$", j and j + 1 or 1)
+	parsed.query = select(3, strfind(url, "^%?([^#]*)", j and j + 1 or 1)) or ""
 
 	return parsed
 end
