@@ -18,6 +18,10 @@ local co_wait_list2 = setmetatable({},{__mode="k"})
 local co_idle_list = setmetatable({},{__mode="v"})
 local co_info = {}
 
+local co_mt = {__index = getfenv(0)}
+local cinfo_pool = {}
+local n_cinfo_pool = 0
+
 local function kill_descendants(ancestor)
 	for descendant in pairs(co_info[ancestor].descendants) do
 		local cinfo = co_info[descendant]
@@ -31,6 +35,8 @@ local function kill_descendants(ancestor)
 		if gc then gc() end
 
 		co_info[ancestor].descendants[descendant] = nil
+		n_cinfo_pool = n_cinfo_pool + 1
+		cinfo_pool[n_cinfo_pool] = co_info[descendant]
 		co_info[descendant] = nil
 	end
 	co_info[ancestor].descendants_n = 0
@@ -50,6 +56,9 @@ local function handle_dead_co(co, ...)
 	local parent = cinfo.parent
 	if parent then
 		if co_info[parent] then
+			if co_info[parent].exit_childs == nil then
+				co_info[parent].exit_childs = setmetatable({},{__mode="k"})
+			end
 			co_info[parent].exit_childs[co] = {...}
 			if co_wait_list[parent] == false then
 				co_wait_list[parent] = true
@@ -67,6 +76,8 @@ local function handle_dead_co(co, ...)
 		kill_descendants(co)
 	end
 
+	n_cinfo_pool = n_cinfo_pool + 1
+	cinfo_pool[n_cinfo_pool] = co_info[co]
 	co_info[co] = nil
 end
 
@@ -142,20 +153,29 @@ local function co_create(fn, gc)
 	local parent = coroutine_running()
 
 	local co = coroutine_create(function(...)
-		-- make sandbox
 		local G = {}
 		G._G = G
-		setmetatable(G, {__index = getfenv(0)})
+		setmetatable(G, co_mt)
 		setfenv(0, G)
 		setfenv(1, G)
 		return fn(...)
 	end)
 
-	local cinfo = {
-		parent = parent,
-		gc = gc,
-		exit_childs = setmetatable({},{__mode="k"})
-	}
+	local cinfo
+
+	if n_cinfo_pool > 0 then
+		cinfo = cinfo_pool[n_cinfo_pool]
+		cinfo_pool[n_cinfo_pool] = nil
+		n_cinfo_pool = n_cinfo_pool - 1
+		cinfo.parent = parent
+		cinfo.gc = gc
+		cinfo.exit_childs = nil
+	else
+		cinfo = {
+			parent = parent,
+			gc = gc,
+		}
+	end
 
 	co_info[co] = cinfo
 
