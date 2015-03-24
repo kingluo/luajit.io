@@ -129,7 +129,7 @@ local function read_header(sock, read_reqline)
 
 	local headers
 	local inline = 0
-	local colon_offset
+	local colon_offset = 0
 	local ret, err = sock:receive(function(rbuf, avaliable)
 		for i = 1,avaliable do
 			local c = rbuf.cp2[0]
@@ -143,7 +143,7 @@ local function read_header(sock, read_reqline)
 			end
 
 			if phase == "header" then
-				if c == colon then
+				if colon_offset == 0 and c == colon then
 					colon_offset = rbuf.cp2 - rbuf.cp1
 				end
 			end

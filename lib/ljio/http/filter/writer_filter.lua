@@ -49,16 +49,11 @@ function M.header_filter(rsp)
 end
 
 local function flush_body(rsp)
-	if rsp.buffers_bytes > 0 then
-		rsp.buffers[rsp.buffers_idx] = nil
+	if rsp.buffers_bytes and rsp.buffers_bytes > 0 then
 		local ret,err = rsp.sock:send(rsp.buffers)
 
-		for i=1,rsp.buffers_idx-1 do
-			rsp.bufpool:put(rsp.buffers[i])
-			rsp.buffers[i] = nil
-		end
-
-		rsp.buffers_idx = 1
+		rsp.bufpool:put(rsp.buffers)
+		rsp.buffers = nil
 		rsp.buffers_bytes = 0
 
 		if err then return nil,err end
@@ -68,13 +63,15 @@ local function flush_body(rsp)
 	return true
 end
 
-function M.body_filter(rsp, ...)
-	if rsp.buffers == nil then
-		rsp.buffers = {}
-		rsp.buffers_bytes = 0
-		rsp.buffers_idx = 1
+local function merge_table(to, from)
+	local idx = #to
+	for i, v in ipairs(from) do
+		to[idx + 1] = v
+		idx = idx + 1
 	end
+end
 
+function M.body_filter(rsp, ...)
 	for i=1,select("#", ...) do
 		local buf = select(i, ...)
 		local eof = buf.eof
@@ -85,9 +82,14 @@ function M.body_filter(rsp, ...)
 			if err then return ret,err end
 			rsp.bufpool:put(buf)
 		elseif buf.size > 0 then
-			rsp.buffers[rsp.buffers_idx] = buf
-			rsp.buffers_bytes = rsp.buffers_bytes + buf.size
-			rsp.buffers_idx = rsp.buffers_idx + 1
+			if rsp.buffers == nil then
+				rsp.buffers = buf
+				rsp.buffers_bytes = buf.size
+			else
+				merge_table(rsp.buffers, buf)
+				rsp.buffers_bytes = rsp.buffers_bytes + buf.size
+				rsp.bufpool:put(buf)
+			end
 		end
 
 		if buf.flush or eof or rsp.buffers_bytes >= postpone_output then
