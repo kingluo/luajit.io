@@ -23,7 +23,7 @@ require("ljio.http") {
 		my_locks = "100k",
 	},
 
-	gzip = true,
+	gzip = false,
 	gzip_comp_level = 1,
 	gzip_min_length = 20,
 	gzip_types = {
