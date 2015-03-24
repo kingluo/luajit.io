@@ -23,9 +23,8 @@ function M.header_filter(rsp)
 		typ = string.match(typ, "[^;]+")
 	end
 	if lcf.gzip and (rsp.status == 200 or rsp.status == 403 or rsp.status == 404)
-		and (lcf.gzip_min_length == nil or (len == nil or len >= lcf.gzip_min_length))
-		and (lcf.gzip_types == nil or (typ == nil or lcf.gzip_types[typ]
-			or srvcf.gzip_types[typ])) then
+		and (len == nil or len >= lcf.gzip_min_length)
+		and (typ ~= nil and (lcf.gzip_types[typ] or srvcf.gzip_types[typ])) then
 		rsp.headers["content-encoding"] = "gzip"
 		rsp.headers["content-length"] = nil
 		rsp.gzip = {}

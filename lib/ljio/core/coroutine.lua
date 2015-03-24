@@ -170,6 +170,7 @@ local function co_create(fn, gc)
 		cinfo.parent = parent
 		cinfo.gc = gc
 		cinfo.exit_childs = nil
+		cinfo.ancestor = nil
 	else
 		cinfo = {
 			parent = parent,

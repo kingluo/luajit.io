@@ -505,6 +505,14 @@ end
 local function http_parse_conf(cfg)
 	g_http_cfg = cfg
 
+	if cfg.gzip_types == nil then
+		cfg.gzip_types = {}
+	end
+	cfg.gzip_types["text/html"] = true
+	if cfg.gzip_min_length == nil then
+		cfg.gzip_min_length = 20
+	end
+
 	cfg.mime_types = {}
 	local types = cfg.types
 	if strsub(cfg.types,1,1) ~= "/" then
@@ -810,8 +818,7 @@ local function handle_http_request(req, rsp)
 		return rsp:finalize()
 	end
 
-	if check_if_modified(rsp) then return end
-	return rsp:try_file()
+	return check_if_modified(rsp) or rsp:try_file()
 end
 
 local function finalize_conn(sock, status)
