@@ -12,6 +12,9 @@ local ssl = require("ljio.socket.ssl")
 local inotify = require("ljio.core.inotify")
 
 local function master_parse_conf(cfg)
+	logging.init(cfg)
+	if cfg.log_import_print then logging.import_print() end
+
 	cfg.worker_processes = cfg.worker_processes or 1
 	if cfg.worker_processes == "auto" then
 		cfg.worker_processes = C.get_nprocs()
@@ -29,13 +32,12 @@ local function master_parse_conf(cfg)
 	if grp == nil then error("invalid group: " .. cfg.group) end
 	cfg.gid = grp.gr_gid
 
-	logging.init(cfg)
-	if cfg.log_import_print then logging.import_print() end
-
 	if cfg.strict then require("ljio.core.strict") end
 end
 
 local function run_worker(cfg, init_worker)
+	logging.init(cfg)
+
 	print("fork worker pid=" .. C.getpid())
 
 	if C.geteuid() == 0 then

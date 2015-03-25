@@ -23,9 +23,9 @@ function M.header_filter(rsp)
 	buf:append("server: luajit.io\r\n")
 
 	buf:append("date: ", http_time(), "\r\n")
-	if rsp.headers["cache-control"] == nil then
-		buf:append("cache-control: no-cache, no-store, private, must-revalidation\r\n")
-	end
+	-- if rsp.headers["cache-control"] == nil then
+		-- buf:append("cache-control: no-cache, no-store, private, must-revalidation\r\n")
+	-- end
 
 	if rsp.req.headers["connection"] == "close" then
 		buf:append("connection: close\r\n")

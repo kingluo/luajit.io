@@ -5,6 +5,7 @@ local ffi = require("ffi")
 local tcp = require("ljio.socket.tcp")
 local master = require("ljio.core.master")
 local signal = require("ljio.core.signal")
+local log = require("ljio.core.logging").log
 
 local strfind = string.find
 local strsub = string.sub
@@ -151,7 +152,7 @@ local function init_worker(conn_handler)
 	local ssock_handler = function(ev)
 		local sock,err = ev.sock:accept()
 		if sock then
-			print("worker pid=" .. C.getpid() .. " get new connection, fd=" .. sock.fd .. ", port=" .. sock.port)
+			log("debug", "worker pid=", C.getpid() .. " get new connection, fd=" .. sock.fd .. ", port=" .. sock.port)
 			connections = connections + 1
 			if connections >= g_tcp_cfg.worker_connections then
 				print("worker pid=" .. C.getpid() .. " unlisten sk")
@@ -161,7 +162,7 @@ local function init_worker(conn_handler)
 			coroutine.spawn(
 				conn_handler,
 				function()
-					print("worker pid=" .. C.getpid() .. " remove connection, fd=" .. sock.fd)
+					-- print("worker pid=" .. C.getpid() .. " remove connection, fd=" .. sock.fd)
 					sock:close()
 					connections = connections - 1
 

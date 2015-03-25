@@ -6,7 +6,7 @@ local epoll = require("ljio.core.epoll")
 local timer = require("ljio.core.timer")
 local utils = require("ljio.core.utils")
 local dfa_compile = require("ljio.core.dfa").compile
-local logging = require("ljio.core.logging")
+local log = require("ljio.core.logging").log
 
 local dns = require("ljio.socket.dns")
 local ssl = require("ljio.socket.ssl")
@@ -15,7 +15,6 @@ local strfind = string.find
 local strsub = string.sub
 local strmatch = string.match
 local tinsert = table.insert
-local log = logging.log
 
 local tcp_mt = {__index = {}}
 
