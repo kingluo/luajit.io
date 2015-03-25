@@ -10,6 +10,9 @@ local g_timer_fd
 local g_timer_ev
 local g_timer_rbtree
 
+local timespec = ffi.new("struct itimerspec")
+local tv = ffi.new("struct timespec")
+
 local function timer_lt(a,b)
 	if a.tv_sec < b.tv_sec then return true end
 	if a.tv_sec == b.tv_sec and a.tv_nsec < b.tv_nsec then
@@ -30,7 +33,6 @@ local timer_mt = {
 local function timerfd_settime(fd, sec, nsec)
 	sec = sec or 0
 	nsec = nsec or 0
-	local timespec = ffi.new("struct itimerspec")
 	timespec.it_value.tv_sec = sec
 	timespec.it_value.tv_nsec = nsec
 	assert(C.timerfd_settime(fd, 0, timespec, nil) == 0)
@@ -41,7 +43,6 @@ local function add_timer(fn, sec)
 	local nsec = (sec%1) * 1000 * 1000 * 1000
 	sec = math.floor(sec)
 
-	local tv = ffi.new("struct timespec")
 	assert(rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, tv) == 0)
 	local timer = setmetatable({
 		tv_sec = tv.tv_sec + sec,
@@ -61,7 +62,6 @@ end
 local function process_all_timers()
 	if g_timer_rbtree:size() == 0 then return 0 end
 
-	local tv = ffi.new("struct timespec")
 	assert(rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, tv) == 0)
 
 	local n_process = 0
@@ -80,7 +80,6 @@ end
 local function get_next_interval()
 	if g_timer_rbtree:size() == 0 then return nil end
 	local t = g_timer_rbtree:min()
-	local tv = ffi.new("struct timespec")
 	assert(rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, tv) == 0)
 	assert(timer_lt(tv, t))
 

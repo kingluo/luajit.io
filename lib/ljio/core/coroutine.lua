@@ -99,7 +99,10 @@ end
 local function co_resume_ll(co, ret, ...)
 	if ret == false then
 		local err = select(1, ...)
-		print("co_resume_ll", err)
+		if err ~= "exit_group" and err ~= "exit" then
+			print(co, err)
+			print(debug.traceback(co))
+		end
 		if err == "exit_group" then
 			local cur = coroutine.running()
 			if cur == nil or co_info[cur].parent == nil then
