@@ -175,6 +175,10 @@ function rbtree_mt.__index.insert(tree, node)
 end
 
 function rbtree_mt.__index.delete(tree, node)
+	if node.left == nil and node.right == nil then
+		return
+	end
+
 	assert(node.left and node.right)
 	tree.n_node = tree.n_node - 1
 

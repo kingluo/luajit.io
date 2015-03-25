@@ -339,13 +339,32 @@ function http_rsp_mt.__index.say(self, ...)
 	return run_next_body_filter(self, buf)
 end
 
-function http_rsp_mt.__index.sendfile(self, path, offset, size, eof)
+function http_rsp_mt.__index.sendfile(self, path, offset, size, eof, absolute)
+	if not absolute then
+		local lcf = self.req.lcf or self.req.srvcf
+		path = (lcf.root or ".") .. "/" .. path
+	end
+
+	if size == nil then
+		local f = io.open(path)
+		if f == nil then
+			return 0
+		end
+		size = f:seek('end')
+		f:close()
+	end
+
+	if size == 0 then
+		return 0
+	end
+
 	local buf = self.bufpool:get()
 	buf.is_file = true
 	buf.path = path
-	buf.offset = offset
+	buf.offset = offset or 0
 	buf.size = size
 	buf.eof = eof
+
 	return run_next_body_filter(self, buf)
 end
 
@@ -463,28 +482,22 @@ local function check_if_modified(rsp)
 	end
 end
 
-function http_rsp_mt.__index.try_file(self, path, eof, absolute)
-	if eof == nil then eof = true end
+local function try_file(self, path)
 	local req = self.req
 	local lcf = req.lcf or req.srvcf
 	local path = path or req.url.path
-	local ext = match(path, "%.([^%.]+)$")
-	if self.headers["content-type"] == nil then
-		self.headers["content-type"] = lcf.mime_types[ext] or "application/octet-stream"
-	end
-	local fpath
-	if absolute then
-		fpath = path
-	else
-		fpath = (lcf.root or ".") .. '/' .. path
-	end
+
+	local fpath = (lcf.root or ".") .. '/' .. path
 	local f = io.open(fpath)
 	if f == nil then return self:finalize(404) end
 	local flen = f:seek('end')
 	f:close()
+
+	local ext = match(path, "%.([^%.]+)$")
+	self.headers["content-type"] = lcf.mime_types[ext]
 	self.headers["content-length"] = flen
 
-	local sent,err = self:sendfile(fpath, 0, flen, eof)
+	local sent,err = self:sendfile(fpath, 0, flen, true, true)
 	if err then
 		return self:finalize(404)
 	end
@@ -818,7 +831,7 @@ local function handle_http_request(req, rsp)
 		return rsp:finalize()
 	end
 
-	return check_if_modified(rsp) or rsp:try_file()
+	return check_if_modified(rsp) or try_file(rsp)
 end
 
 local function finalize_conn(sock, status)

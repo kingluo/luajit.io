@@ -62,6 +62,7 @@ end
 function M.body_filter(rsp, ...)
 	for i=1,select("#", ...) do
 		local buf = select(i, ...)
+		local flush = buf.flush
 		local eof = buf.eof
 		if buf.is_file then
 			local ret,err = flush_body(rsp)
@@ -78,7 +79,7 @@ function M.body_filter(rsp, ...)
 			end
 		end
 
-		if buf.flush or eof or rsp.buffers.size >= postpone_output then
+		if flush or eof or (rsp.buffers and rsp.buffers.size >= postpone_output) then
 			local ret,err = flush_body(rsp)
 			if err then return ret,err end
 		end

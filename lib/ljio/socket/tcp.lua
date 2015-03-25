@@ -392,9 +392,10 @@ local function flatten_table(self, data, idx, bytes)
 			if typ ~= "string" then v = tostring(v) end
 			if idx == self.iovec_len then
 				-- realloc the iovec array
+				local old_iovec_len = self.iovec_len
 				self.iovec_len = self.iovec_len + MAX_IOVCNT
 				iovec = ffi.new("struct iovec[?]", self.iovec_len)
-				ffi.copy(iovec, self.iovec, bytes)
+				ffi.copy(iovec, self.iovec, ffi.sizeof("struct iovec") * old_iovec_len)
 				self.iovec = iovec
 			end
 			iovec[idx].iov_base = ffi.cast("void *", v)
