@@ -31,9 +31,6 @@ local function kill_descendants(ancestor)
 			cinfo.sleep_timer = nil
 		end
 
-		local gc = cinfo.gc
-		if gc then gc() end
-
 		co_info[ancestor].descendants[descendant] = nil
 		n_cinfo_pool = n_cinfo_pool + 1
 		cinfo_pool[n_cinfo_pool] = co_info[descendant]
@@ -49,9 +46,6 @@ local function handle_dead_co(co, ...)
 		cinfo.sleep_timer:cancel()
 		cinfo.sleep_timer = nil
 	end
-
-	local gc = cinfo.gc
-	if gc then gc() end
 
 	local parent = cinfo.parent
 	if parent then
@@ -99,10 +93,6 @@ end
 local function co_resume_ll(co, ret, ...)
 	if ret == false then
 		local err = select(1, ...)
-		if err ~= "exit_group" and err ~= "exit" then
-			print(co, err)
-			print(debug.traceback(co))
-		end
 		if err == "exit_group" then
 			local cur = coroutine.running()
 			if cur == nil or co_info[cur].parent == nil then
@@ -152,6 +142,26 @@ local function co_idle(flag, ...)
 	return coroutine_yield(flag, ...)
 end
 
+local function run_gc(gc, rc, ...)
+	if gc then gc() end
+	if rc == false then
+		local err = ...
+		if err == "exit_group" or err == "exit" then
+			return error(err, 0)
+		else
+			return error(err)
+		end
+	end
+	return rc, ...
+end
+
+local function print_traceback(err)
+	if err ~= "exit_group" and err ~= "exit" then
+		print(debug.traceback(coroutine_running(), err, 2))
+	end
+	return err
+end
+
 local function co_create(fn, gc)
 	local parent = coroutine_running()
 
@@ -161,7 +171,7 @@ local function co_create(fn, gc)
 		setmetatable(G, co_mt)
 		setfenv(0, G)
 		setfenv(1, G)
-		return fn(...)
+		return run_gc(gc, xpcall(fn, print_traceback, ...))
 	end)
 
 	local cinfo

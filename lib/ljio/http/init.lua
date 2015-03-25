@@ -867,7 +867,7 @@ local function http_handler(sock)
 		if headers == nil then
 			local err = method
 			if err ~= "closed" then
-				finalize_conn(sock, err)
+				return finalize_conn(sock, err)
 			end
 			break
 		end
@@ -883,8 +883,6 @@ local function http_handler(sock)
 			break
 		end
 	end
-
-	return sock:close()
 end
 
 local function run(cfg)
