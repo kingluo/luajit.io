@@ -90,7 +90,7 @@ local function socket_read(self, rbuf, size)
 		rbuf.rp = rbuf.rp + len
 	elseif len == 0 then
 		self:close()
-		err = "socket closed"
+		err = "closed"
 	elseif errno == C.EAGAIN then
 		self:yield(YIELD_R)
 	elseif errno ~= C.EINTR then
@@ -280,7 +280,7 @@ local function receive_ll(self, pattern)
 end
 
 function tcp_mt.__index.receive(self, pattern)
-	if self.closed then return nil, "socket closed" end
+	if self.closed then return nil, "closed" end
 
 	if self.reading then return nil,"socket busy reading" end
 	self.reading = true

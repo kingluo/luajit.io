@@ -124,12 +124,13 @@ end
 local function read_header(sock, read_reqline)
 	local method, url, version
 	local phase = read_reqline and "line" or "header"
-	local quota = g_http_cfg.client_header_buffer_size or 8192
 	sock:settimeout((g_http_cfg.client_header_timeout or 60) * 1000)
 
 	local headers
 	local inline = 0
 	local colon_offset = 0
+	local quota = g_http_cfg.large_client_header_buffers[2]
+	sock.read_quota = sock.stats.consume + g_http_cfg.large_client_header_buffers[1] * quota
 	local ret, err = sock:receive(function(rbuf, avaliable)
 		for i = 1,avaliable do
 			local c = rbuf.cp2[0]
@@ -150,20 +151,26 @@ local function read_header(sock, read_reqline)
 
 			if inline == 2 then
 				inline = 0
+
 				if rbuf.cp1 == rbuf.cp2 - 1 then
 					rbuf.cp2 = rbuf.cp2 + 1
 					return nil, "done"
 				end
+
+				if rbuf.cp2 - rbuf.cp1 + 1 > quota then
+					return nil, 414
+				end
+
 				if phase == "line" then
 					local ptr = ffi.cast("char*", C.memchr(rbuf.cp1, space, rbuf.cp2 - rbuf.cp1 - 1))
 					if ptr == nil then
-						return nil, "malform"
+						return nil, 400
 					end
 					method = ffi.string(rbuf.cp1, ptr - rbuf.cp1)
 					rbuf.cp1 = ptr + 1
 					ptr = ffi.cast("char*", C.memchr(rbuf.cp1, space, rbuf.cp2 - rbuf.cp1 - 1))
 					if ptr == nil then
-						return nil, "malform"
+						return nil, 400
 					end
 					url = ffi.string(rbuf.cp1, ptr - rbuf.cp1)
 					version = ffi.string(ptr + 6, rbuf.cp2 - ptr - 5)
@@ -171,7 +178,7 @@ local function read_header(sock, read_reqline)
 					phase = "header"
 				elseif phase == "header" then
 					if colon_offset == 0 then
-						return nil, "malform"
+						return nil, 400
 					end
 					local ptr = rbuf.cp1 + colon_offset
 					local name = ffi.string(rbuf.cp1, ptr - rbuf.cp1)
@@ -186,14 +193,16 @@ local function read_header(sock, read_reqline)
 			end
 
 			rbuf.cp2 = rbuf.cp2 + 1
-			quota = quota - 1
-			if quota == 0 then
-				return nil, "no quota"
-			end
 		end
 	end)
+	sock.read_quota = nil
 
 	if err and err ~= "done" then
+		if err == "closed" and not sock.closed then
+			err = 400
+		elseif err == "timeout" then
+			err = 408
+		end
 		method = err
 	end
 
@@ -517,6 +526,14 @@ end
 
 local function http_parse_conf(cfg)
 	g_http_cfg = cfg
+
+	if cfg.client_header_timeout == nil then
+		cfg.client_header_timeout = 60
+	end
+
+	if cfg.large_client_header_buffers == nil then
+		cfg.large_client_header_buffers = {4, 8 * 1024}
+	end
 
 	if cfg.gzip_types == nil then
 		cfg.gzip_types = {}
@@ -849,14 +866,10 @@ local function http_handler(sock)
 
 		if headers == nil then
 			local err = method
-			if err == "closed" then
-				break
+			if err ~= "closed" then
+				finalize_conn(sock, err)
 			end
-			local status = 400
-			if err == "timeout" then
-				status = 408
-			end
-			return finalize_conn(sock, status)
+			break
 		end
 
 		local req = http_req_new(method, parse_url(url), version, headers, sock)
@@ -870,6 +883,8 @@ local function http_handler(sock)
 			break
 		end
 	end
+
+	return sock:close()
 end
 
 local function run(cfg)
