@@ -232,7 +232,7 @@ local function co_wait(...)
 	while true do
 		for i=1,n do
 			local co = select(i,...)
-			local d = co_info[parent].exit_childs[co]
+			local d = co_info[parent].exit_childs and co_info[parent].exit_childs[co] or nil
 			if d then
 				co_info[parent].exit_childs[co] = nil
 				return unpack(d)

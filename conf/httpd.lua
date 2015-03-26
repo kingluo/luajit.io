@@ -7,7 +7,7 @@ require("ljio.http") {
 	strict = true,
 
 	-- logging
-	log_level = "debug",
+	log_level = "info",
 	log_stderr = true,
 	log_import_print = false,
 

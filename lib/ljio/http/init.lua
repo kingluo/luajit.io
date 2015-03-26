@@ -40,6 +40,26 @@ local v_time_t = ffi.new("time_t[1]")
 local if_modified_tm = ffi.new("struct tm")
 local fstat = ffi.new("struct stat[1]")
 
+local table_pool = require("ljio.core.table_pool")
+
+local map_pool = table_pool.new_map()
+
+local url_pool = table_pool.new()
+
+local req_pool = table_pool.new(nil, http_req_mt)
+
+local rsp_pool = table_pool.new(function(rsp)
+	rsp.sid = nil
+	rsp.finalized = nil
+	rsp.uri_args = nil
+	rsp.exec = nil
+	rsp.eof = nil
+	rsp.buffers = nil
+	rsp.chunked = nil
+	rsp.body_sent = nil
+	rsp.gzip = nil
+end, http_rsp_mt)
+
 local function escape(s)
     s = gsub(s, "([^%w%.%- ])", function(c)
 		return format("%%%02X", byte(c))
@@ -55,7 +75,7 @@ local function unescape(s)
 end
 
 local function parse_url(url)
-	local parsed = {}
+	local parsed = url_pool:get()
 
 	local i, j, path = strfind(url, "^([^%?]*)")
 
@@ -184,7 +204,7 @@ local function read_header(sock, read_reqline)
 					local name = ffi.string(rbuf.cp1, ptr - rbuf.cp1)
 					local value = ffi.string(ptr + 2, rbuf.cp2 - ptr - 3)
 					if headers == nil then
-						headers = {}
+						headers = map_pool:get()
 					end
 					colon_offset = 0
 					headers[lower(name)] = value
@@ -311,11 +331,6 @@ function http_req_mt.__index.get_post_args(self)
 	local body = self.sock:receive("*a")
 	self.post_args = decode_args(body)
 	return self.post_args
-end
-
-local function http_req_new(method, url, version, headers, sock)
-	return setmetatable({method = method, url = url, version = version,
-		headers = headers, sock = sock}, http_req_mt)
 end
 
 function http_rsp_mt.__index.get_sid(self)
@@ -511,11 +526,6 @@ local function try_file(self, path)
 		return self:finalize(404)
 	end
 	return sent
-end
-
-local function http_rsp_new(req, sock)
-	return setmetatable({headers_sent = false, headers = {},
-		sock = sock, req = req, status=200}, http_rsp_mt)
 end
 
 --#--
@@ -872,12 +882,30 @@ local function http_handler(sock)
 			break
 		end
 
-		local req = http_req_new(method, parse_url(url), version, headers, sock)
-		local rsp = http_rsp_new(req, sock)
+		local req = req_pool:get()
+		req.method = method
+		req.url = parse_url(url)
+		req.version = version
+		req.headers = headers
+		req.sock = sock
+
+		local rsp = rsp_pool:get()
+		rsp.headers_sent = false
+		rsp.req = req
+		rsp.sock = sock
+		rsp.status = 200
+		rsp.headers = map_pool:get()
 
 		sock.read_quota = sock.stats.consume + (headers["content-length"] or 0)
 		handle_http_request(req, rsp)
 		sock.read_quota = nil
+
+		map_pool:put(req.headers)
+		url_pool:put(req.url)
+		req_pool:put(req)
+
+		map_pool:put(rsp.headers)
+		rsp_pool:put(rsp)
 
 		if headers["connection"] == "close" then
 			break
