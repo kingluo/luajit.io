@@ -12,8 +12,9 @@ function _M.put(self, tbl)
 	end
 end
 
-function _M.get(self)
+function _M.get(self, ...)
 	local tbl = self._next
+
 	if tbl == nil then
 		tbl = {}
 		if self.mt then
@@ -27,6 +28,11 @@ function _M.get(self)
 			self.clean(tbl)
 		end
 	end
+
+	for i = 1, select("#", ...) do
+		tbl[i] = select(i, ...)
+	end
+
 	return tbl
 end
 
