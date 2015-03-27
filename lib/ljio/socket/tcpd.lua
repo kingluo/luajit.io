@@ -150,7 +150,7 @@ local function init_worker(conn_handler)
 	local wait_listen_sk = false
 
 	local ssock_handler = function(ev)
-		local sock,err = ev.sock:accept()
+		local sock = ev.sock:accept()
 		if sock then
 			log("debug", "worker pid=", C.getpid(), " new connection, fd=", sock.fd)
 			connections = connections + 1
@@ -178,8 +178,6 @@ local function init_worker(conn_handler)
 				end,
 				sock
 			)
-		else
-			print("worker pid=" .. C.getpid() .. " accept error: " .. err)
 		end
 	end
 

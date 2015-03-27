@@ -469,7 +469,7 @@ function http_rsp_mt.__index.redirect(self, uri, status)
 	return coroutine.exit(true)
 end
 
-local function check_if_modified(rsp)
+local function if_not_modified(rsp)
 	local req = rsp.req
 	local lcf = req.lcf or req.srvcf
 	local path = req.url.path
@@ -848,7 +848,7 @@ local function handle_http_request(req, rsp)
 		return rsp:finalize()
 	end
 
-	return check_if_modified(rsp) or try_file(rsp)
+	return if_not_modified(rsp) or try_file(rsp)
 end
 
 local function finalize_conn(sock, status)
