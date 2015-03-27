@@ -1,12 +1,10 @@
 -- Copyright (C) Jinhua Luo
 
+local ffi = require("ffi")
 local timer = require("ljio.core.timer")
 local epoll = require("ljio.core.epoll")
-local table_pool = require("ljio.core.table_pool")
-
 local add_timer = timer.add_timer
-local tinsert = table.insert
-local tremove = table.remove
+local pairs = pairs
 
 local coroutine_create = coroutine.create
 local coroutine_resume = coroutine.resume
@@ -14,32 +12,32 @@ local coroutine_yield = coroutine.yield
 local coroutine_running = coroutine.running
 local coroutine_status = coroutine.status
 
-local k_mode_mt = {__mode="k"}
-local v_mode_mt = {__mode="v"}
-
-local co_wait_list = setmetatable({}, k_mode_mt)
-local co_wait_list2 = setmetatable({}, k_mode_mt)
-local co_idle_list = setmetatable({}, v_mode_mt)
+local co_wait_list = {}
+local co_wait_list2 = {}
+local co_idle_list = {}
 local co_info = {}
 
 local co_mt = {__index = getfenv(0)}
-local cinfo_pool = table_pool.new()
 
-exit_vals_pool = table_pool.new_array()
+local function remove_co(co)
+	local cinfo = co_info[co]
+
+	if cinfo.sleep_timer then
+		cinfo.sleep_timer:cancel()
+		cinfo.sleep_timer = nil
+	end
+
+	co_wait_list[co] = nil
+	co_wait_list2[co] = nil
+	co_idle_list[co] = nil
+
+	co_info[co] = nil
+end
 
 local function kill_descendants(ancestor)
 	for descendant in pairs(co_info[ancestor].descendants) do
 		co_info[ancestor].descendants[descendant] = nil
-
-		local cinfo = co_info[descendant]
-
-		if cinfo.sleep_timer then
-			cinfo.sleep_timer:cancel()
-			cinfo.sleep_timer = nil
-		end
-
-		cinfo_pool:put(cinfo)
-		co_info[descendant] = nil
+		remove_co(descendant)
 	end
 
 	co_info[ancestor].descendants_n = 0
@@ -48,18 +46,13 @@ end
 local function handle_dead_co(co, ...)
 	local cinfo = co_info[co]
 
-	if cinfo.sleep_timer then
-		cinfo.sleep_timer:cancel()
-		cinfo.sleep_timer = nil
-	end
-
 	local parent = cinfo.parent
 	if parent then
 		if co_info[parent] then
 			if co_info[parent].exit_childs == nil then
-				co_info[parent].exit_childs = setmetatable({}, k_mode_mt)
+				co_info[parent].exit_childs = {}
 			end
-			co_info[parent].exit_childs[co] = exit_vals_pool:get(...)
+			co_info[parent].exit_childs[co] = {...}
 			if co_wait_list[parent] == false then
 				co_wait_list[parent] = true
 			end
@@ -72,12 +65,11 @@ local function handle_dead_co(co, ...)
 				ancestor.descendants_n = ancestor.descendants_n - 1
 			end
 		end
-	else
+	elseif cinfo.descendants then
 		kill_descendants(co)
 	end
 
-	cinfo_pool:put(cinfo)
-	co_info[co] = nil
+	return remove_co(co)
 end
 
 local function co_kill(co)
@@ -85,7 +77,6 @@ local function co_kill(co)
 		if co_info[co].parent ~= coroutine_running() then
 			return false,'not direct child'
 		end
-
 		handle_dead_co(co, false, "killed")
 	end
 	return true
@@ -108,6 +99,8 @@ local function co_resume_ll(co, ret, ...)
 			else
 				error(err, 0)
 			end
+		elseif err ~= "exit" then
+			print(debug.traceback(co, err))
 		end
 	end
 
@@ -127,43 +120,23 @@ local function co_resume(co, ...)
 end
 
 local epoll_idle_hook_registered = false
-local function co_idle(flag, ...)
+local function co_idle()
 	local co = coroutine_running()
-	assert(co)
+	co_idle_list[co] = 1
 
 	if epoll_idle_hook_registered == false then
 		epoll.add_prepare_hook(function()
-			for i=1,#co_idle_list do
-				co_resume(co_idle_list[1])
-				tremove(co_idle_list,1)
+			local n = 1
+			for co in pairs(co_idle_list) do
+				co_idle_list[co] = nil
+				co_resume(co)
 			end
-			return ((#co_idle_list > 0) and 1 or -1)
+			return ((n > 0) and 1 or -1)
 		end)
 		epoll_idle_hook_registered = true
 	end
-	tinsert(co_idle_list, co)
 
-	return coroutine_yield(flag, ...)
-end
-
-local function post_xpcall(gc, rc, ...)
-	if gc then gc() end
-	if rc == false then
-		local err = ...
-		if err == "exit_group" or err == "exit" then
-			return error(err, 0)
-		else
-			return error(err)
-		end
-	end
-	return ...
-end
-
-local function print_traceback(err)
-	if err ~= "exit_group" and err ~= "exit" then
-		print(debug.traceback(coroutine_running(), err, 2))
-	end
-	return err
+	return coroutine_yield()
 end
 
 local function co_create(fn, gc)
@@ -175,25 +148,22 @@ local function co_create(fn, gc)
 		setmetatable(G, co_mt)
 		setfenv(0, G)
 		setfenv(1, G)
-		return post_xpcall(gc, xpcall(fn, print_traceback, ...))
+		return fn(...)
 	end)
 
-	local cinfo = cinfo_pool:get()
-	cinfo.parent = parent
-	cinfo.gc = gc
-	cinfo.exit_childs = nil
-	cinfo.ancestor = nil
+	local cinfo = {parent = parent, gc = gc}
 
 	co_info[co] = cinfo
 
 	if parent then
 		cinfo.ancestor = co_info[parent].ancestor or parent
 		local ancestor = co_info[cinfo.ancestor]
+		if ancestor.descendants == nil then
+			ancestor.descendants = {}
+			ancestor.descendants_n = 0
+		end
 		ancestor.descendants[co] = 1
 		ancestor.descendants_n = ancestor.descendants_n + 1
-	else
-		cinfo.descendants = setmetatable({}, k_mode_mt)
-		cinfo.descendants_n = 0
 	end
 
 	return co
@@ -225,7 +195,6 @@ local function co_wait(...)
 			local co = select(i, ...)
 			local vals = co_info[parent].exit_childs and co_info[parent].exit_childs[co] or nil
 			if vals then
-				exit_vals_pool:put(vals)
 				co_info[parent].exit_childs[co] = nil
 				return unpack(vals)
 			elseif co_info[co] == nil then
@@ -299,3 +268,12 @@ coroutine.wait_descendants = wait_descendants
 coroutine.kill = co_kill
 coroutine.sleep = co_sleep
 coroutine.idle = co_idle
+
+-- local function test()
+	-- return 1,2,3
+-- end
+
+-- for i = 1, 1000000 do
+	-- local co = coroutine.create(test)
+	-- coroutine.resume(co)
+-- end
