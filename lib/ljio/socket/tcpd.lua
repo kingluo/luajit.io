@@ -3,6 +3,7 @@
 local C = require("ljio.cdef")
 local ffi = require("ffi")
 local tcp = require("ljio.socket.tcp")
+local epoll = require("ljio.core.epoll")
 local master = require("ljio.core.master")
 local signal = require("ljio.core.signal")
 local log = require("ljio.core.logging").log

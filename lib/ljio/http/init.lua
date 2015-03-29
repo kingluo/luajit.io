@@ -123,87 +123,31 @@ end
 
 local function read_header(sock, read_reqline)
 	local method, url, version
-	local phase = read_reqline and "line" or "header"
-	sock:settimeout((g_http_cfg.client_header_timeout or 60) * 1000)
+
+	if read_reqline then
+		local line, err = sock:receive()
+		if err then
+			return nil, err
+		end
+
+		method, url, version = match(line, "(.*) (.*) HTTP/(.*)")
+	end
 
 	local headers
-	local inline = 0
-	local colon_offset = 0
-	local quota = g_http_cfg.large_client_header_buffers[2]
-	sock.read_quota = sock.stats.consume + g_http_cfg.large_client_header_buffers[1] * quota
-	local ret, err = sock:receive(function(rbuf, avaliable)
-		for i = 1,avaliable do
-			local c = rbuf.cp2[0]
-
-			if inline == 0 then
-				if c == eol1 then
-					inline = 1
-				end
-			elseif inline == 1 then
-				inline = c == eol2 and 2 or 0
+	local line, err, name, value
+	while true do
+		line, err = sock:receive()
+		if err then
+			return nil, err
+		elseif line == "" then
+			break
+		else
+			name, value = match(line, "(.-): (.*)")
+			if headers == nil then
+				headers = {}
 			end
-
-			if phase == "header" then
-				if colon_offset == 0 and c == colon then
-					colon_offset = rbuf.cp2 - rbuf.cp1
-				end
-			end
-
-			if inline == 2 then
-				inline = 0
-
-				if rbuf.cp1 == rbuf.cp2 - 1 then
-					rbuf.cp2 = rbuf.cp2 + 1
-					return nil, "done"
-				end
-
-				if rbuf.cp2 - rbuf.cp1 + 1 > quota then
-					return nil, 414
-				end
-
-				if phase == "line" then
-					local ptr = ffi.cast("char*", C.memchr(rbuf.cp1, space, rbuf.cp2 - rbuf.cp1 - 1))
-					if ptr == nil then
-						return nil, 400
-					end
-					method = ffi.string(rbuf.cp1, ptr - rbuf.cp1)
-					rbuf.cp1 = ptr + 1
-					ptr = ffi.cast("char*", C.memchr(rbuf.cp1, space, rbuf.cp2 - rbuf.cp1 - 1))
-					if ptr == nil then
-						return nil, 400
-					end
-					url = ffi.string(rbuf.cp1, ptr - rbuf.cp1)
-					version = ffi.string(ptr + 6, rbuf.cp2 - ptr - 5)
-					rbuf.cp1 = rbuf.cp2 + 1
-					phase = "header"
-				elseif phase == "header" then
-					if colon_offset == 0 then
-						return nil, 400
-					end
-					local ptr = rbuf.cp1 + colon_offset
-					local name = ffi.string(rbuf.cp1, ptr - rbuf.cp1)
-					local value = ffi.string(ptr + 2, rbuf.cp2 - ptr - 3)
-					if headers == nil then
-						headers = {}
-					end
-					colon_offset = 0
-					headers[lower(name)] = value
-					rbuf.cp1 = rbuf.cp2 + 1
-				end
-			end
-
-			rbuf.cp2 = rbuf.cp2 + 1
+			headers[name] = value
 		end
-	end)
-	sock.read_quota = nil
-
-	if err and err ~= "done" then
-		if err == "closed" and not sock.closed then
-			err = 400
-		elseif err == "timeout" then
-			err = 408
-		end
-		method = err
 	end
 
 	return headers, method, url, version
