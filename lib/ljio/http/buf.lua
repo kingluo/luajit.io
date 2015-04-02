@@ -47,6 +47,11 @@ function bufpool_mt.__index.get(self, ...)
 	if buf == nil then
 		buf = setmetatable({_n=0,size=0}, buf_mt)
 	else
+		buf.is_file = nil
+		buf.path = nil
+		buf.offset = nil
+		buf.eof = nil
+		buf.flush = nil
 		self.n_buf = self.n_buf - 1
 		self._next = buf._next
 		buf._next = nil
@@ -57,10 +62,6 @@ end
 
 function bufpool_mt.__index.put(self, buf)
 	if self.n_buf < self.max then
-		for k in pairs(buf) do
-			buf[k] = nil
-		end
-		buf._n = #buf
 		buf._next = self._next
 		self._next = buf
 		self.n_buf = self.n_buf + 1

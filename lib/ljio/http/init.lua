@@ -27,6 +27,11 @@ local tinsert = table.insert
 local tsort = table.sort
 local tconcat = table.concat
 
+local percent = byte("%")
+local plus = byte("+")
+local dot = byte(".")
+local question = byte("?")
+local slash = byte("/")
 local space = byte(" ")
 local colon = byte(":")
 local eol1 = byte("\r")
@@ -54,53 +59,6 @@ local function unescape(s)
 	end))
 end
 
-local function parse_url(url)
-	local parsed = {}
-
-	local i, j, path = strfind(url, "^([^%?]*)")
-
-	if path == nil or path == "" then
-		parsed.path = "/"
-	else
-		if strfind(url, "/[%./]+") then
-			local segments = {""}
-			local n = 1
-			local last_slash = strsub(path, #path, #path) == "/"
-
-			for segment in gmatch(path, "([^/]+)") do
-				if segment == ".." then
-					if n > 1 then
-						segments[n] = nil
-						n = n - 1
-					end
-				elseif segment ~= "." then
-					n = n + 1
-					segments[n] = segment
-				end
-			end
-
-			if n == 1 then
-				path = "/"
-			else
-				if last_slash then
-					tinsert(segments, "")
-				end
-				path = tconcat(segments, "/")
-			end
-		end
-
-		if strfind(path, "[%+%%]") then
-			path = unescape(path)
-		end
-
-		parsed.path = path
-	end
-
-	parsed.query = select(3, strfind(url, "^%?([^#]*)", j and j + 1 or 1)) or ""
-
-	return parsed
-end
-
 local function decode_args(query)
 	local uri_args = {}
 
@@ -121,36 +79,171 @@ local function decode_args(query)
 	return uri_args
 end
 
-local function read_header(sock, read_reqline)
-	local method, url, version
+local g_path_tmp
 
-	if read_reqline then
-		local line, err = sock:receive()
-		if err then
-			return nil, err
-		end
-
-		method, url, version = match(line, "(.*) (.*) HTTP/(.*)")
+local function parse_url(url, len)
+	if url[0] ~= slash then
+		return nil
 	end
 
-	local headers
-	local line, err, name, value
-	while true do
-		line, err = sock:receive()
-		if err then
-			return nil, err
-		elseif line == "" then
-			break
-		else
-			name, value = match(line, "(.-): (.*)")
-			if headers == nil then
-				headers = {}
+	if len == 1 then
+		return "/"
+	end
+
+	if len > g_http_cfg.large_client_header_buffers[2] then
+		return nil
+	end
+
+	if g_path_tmp == nil then
+		g_path_tmp = ffi.new("char[?]", g_http_cfg.large_client_header_buffers[2], "/")
+	end
+
+	local path = g_path_tmp
+
+	local pos1 = 0
+	local pos2 = 0
+	local qpos
+	local need_unescape = false
+
+	for i = 1, len do
+		local c
+		if i < len then
+			c = url[i]
+		end
+		if c == slash or c == question or c == nil then
+			local n = pos2 - pos1
+			if n == 2 and C.memcmp(path + pos1 + 1, "..", 2) == 0 then
+				if pos1 > 0 then
+					local ptr = ffi.cast("char*", C.memrchr(path, slash, pos1))
+					pos2 = ptr - path
+					pos1 = pos2
+				else
+					pos2 = pos1
+				end
+			elseif n == 1 and path[pos1 + 1] == dot then
+				pos2 = pos1
+			elseif path[pos2] ~= slash and c ~= nil and c ~= question then
+				pos2 = pos2 + 1
+				path[pos2] = c
+				pos1 = pos2
 			end
-			headers[name] = value
+
+			if c == question then
+				qpos = i
+				break
+			end
+		else
+			pos2 = pos2 + 1
+			path[pos2] = c
+			if not need_unescape and (c == percent or c == plus) then
+				need_unescape = true
+			end
 		end
 	end
 
-	return headers, method, url, version
+	path = ffi.string(path, pos2 + 1)
+	if need_unescape then
+		path = unescape(path)
+	end
+
+	local query
+	if qpos then
+		query = ffi.string(url + qpos + 1, len - qpos)
+	end
+
+	return path, query
+end
+
+local function parse_header(rbuf, avaliable, ctx)
+	for i = 1,avaliable do
+		local c = rbuf.cp2[0]
+
+		if ctx.inline == 0 then
+			if c == eol1 then
+				ctx.inline = 1
+			end
+		elseif ctx.inline == 1 then
+			ctx.inline = c == eol2 and 2 or 0
+		end
+
+		if ctx.phase == "header" then
+			if ctx.colon_offset == 0 and c == colon then
+				ctx.colon_offset = rbuf.cp2 - rbuf.cp1
+			end
+		end
+
+		if ctx.inline == 2 then
+			ctx.inline = 0
+
+			if rbuf.cp1 == rbuf.cp2 - 1 then
+				rbuf.cp2 = rbuf.cp2 + 1
+				return nil, "done"
+			end
+
+			if rbuf.cp2 - rbuf.cp1 + 1 > ctx.quota then
+				return nil, 414
+			end
+
+			if ctx.phase == "line" then
+				local ptr = ffi.cast("char*", C.memchr(rbuf.cp1, space, rbuf.cp2 - rbuf.cp1 - 1))
+				if ptr == nil then
+					return nil, 400
+				end
+				ctx.method = ffi.string(rbuf.cp1, ptr - rbuf.cp1)
+				rbuf.cp1 = ptr + 1
+				ptr = ffi.cast("char*", C.memchr(rbuf.cp1, space, rbuf.cp2 - rbuf.cp1 - 1))
+				if ptr == nil then
+					return nil, 400
+				end
+				local path, query = parse_url(rbuf.cp1, ptr - rbuf.cp1)
+				if path == nil then
+					return nil, 400
+				end
+				ctx.url = {path = path, query = query}
+				ctx.version = ffi.string(ptr + 6, rbuf.cp2 - ptr - 5)
+				rbuf.cp1 = rbuf.cp2 + 1
+				ctx.phase = "header"
+			elseif ctx.phase == "header" then
+				if ctx.colon_offset == 0 then
+					return nil, 400
+				end
+				local ptr = rbuf.cp1 + ctx.colon_offset
+				local name = ffi.string(rbuf.cp1, ptr - rbuf.cp1)
+				local value = ffi.string(ptr + 2, rbuf.cp2 - ptr - 3)
+				if ctx.headers == nil then
+					ctx.headers = {}
+				end
+				ctx.colon_offset = 0
+				ctx.headers[lower(name)] = value
+				rbuf.cp1 = rbuf.cp2 + 1
+			end
+		end
+
+		rbuf.cp2 = rbuf.cp2 + 1
+	end
+end
+
+local function read_header(sock, ctx)
+	local headers, method, url, version
+	--sock:settimeout((g_http_cfg.client_header_timeout or 60) * 1000)
+
+	local quota = g_http_cfg.large_client_header_buffers[2]
+	sock.read_quota = sock.stats.consume + g_http_cfg.large_client_header_buffers[1] * quota
+	ctx.phase = "line"
+	ctx.inline = 0
+	ctx.colon_offset = 0
+	ctx.quota = quota
+	local ret, err = sock:receive(parse_header, ctx)
+	sock.read_quota = nil
+
+	if err and err ~= "done" then
+		if err == "closed" and not sock.closed then
+			err = 400
+		elseif err == "timeout" then
+			err = 408
+		end
+		return err
+	end
 end
 
 function http_req_mt.__index.read_chunk(self)
@@ -257,9 +350,8 @@ function http_req_mt.__index.get_post_args(self)
 	return self.post_args
 end
 
-local function http_req_new(method, url, version, headers, sock)
-	return setmetatable({method = method, url = url, version = version,
-		headers = headers, sock = sock}, http_req_mt)
+local function http_req_new(sock)
+	return setmetatable({sock = sock}, http_req_mt)
 end
 
 function http_rsp_mt.__index.get_sid(self)
@@ -457,8 +549,18 @@ local function try_file(self, path)
 	return sent
 end
 
+local hash_mt = {
+    __newindex = function(tbl, key, value)
+        if value ~= nil and rawget(tbl, key) == nil then
+            rawset(tbl, #tbl + 1, key)
+        end
+        return rawset(tbl, key, value)
+    end
+}
+
 local function http_rsp_new(req, sock)
-	return setmetatable({headers_sent = false, headers = {},
+	return setmetatable({headers_sent = false,
+		headers = setmetatable({}, hash_mt),
 		sock = sock, req = req, status=200}, http_rsp_mt)
 end
 
@@ -795,8 +897,8 @@ local function handle_http_request(req, rsp)
 	return if_not_modified(rsp) or try_file(rsp)
 end
 
-local function finalize_conn(sock, status)
-	local body = special_rsp[status]
+local function finalize_conn(sock, status, body)
+	local body = body or special_rsp[status]
 	sock:send(status_tbl[status],
 		"server: luajit.io\r\ncontent-type: text/html\r\n",
 		"content-length: " .. #body .. "\r\n",
@@ -806,26 +908,21 @@ end
 
 local function http_handler(sock)
 	while true do
-		local headers, method, url, version = read_header(sock, true)
+		local req = http_req_new(sock)
+		local err = read_header(sock, req)
 
-		if headers == nil then
-			local err = method
+		if err then
 			if err ~= "closed" then
-				return finalize_conn(sock, err)
+				finalize_conn(sock, err)
 			end
-			break
+			return
 		end
 
-		local req = http_req_new(method, parse_url(url), version, headers, sock)
 		local rsp = http_rsp_new(req, sock)
 
-		sock.read_quota = sock.stats.consume + (headers["content-length"] or 0)
+		sock.read_quota = sock.stats.consume + (req.headers["content-length"] or 0)
 		handle_http_request(req, rsp)
 		sock.read_quota = nil
-
-		if headers["connection"] == "close" then
-			break
-		end
 	end
 end
 

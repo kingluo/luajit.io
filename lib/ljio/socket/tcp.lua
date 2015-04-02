@@ -145,7 +145,7 @@ function tcp_mt.__index.settimeout(self, msec)
 	self.timeout = msec / 1000
 end
 
-local function receive_ll(self, pattern)
+local function receive_ll(self, pattern, ...)
 	if not self.rbuf then
 		local buf = C.realloc(nil, READ_CHUNK_SIZE)
 		local p = ffi.cast("char*", buf)
@@ -196,7 +196,7 @@ local function receive_ll(self, pattern)
 				end
 			elseif typ == "function" then
 				local cp = rbuf.cp2
-				local r,err = pattern(self.rbuf, avaliable)
+				local r,err = pattern(self.rbuf, avaliable, ...)
 				self.stats.consume = self.stats.consume + (rbuf.cp2 - cp)
 				if r or err then
 					rbuf.cp1 = rbuf.cp2
@@ -278,7 +278,7 @@ local function receive_ll(self, pattern)
 	end
 end
 
-function tcp_mt.__index.receive(self, pattern)
+function tcp_mt.__index.receive(self, pattern, ...)
 	if self.closed then return nil, "closed" end
 
 	if self.reading then return nil,"socket busy reading" end
@@ -294,7 +294,7 @@ function tcp_mt.__index.receive(self, pattern)
 		end, self.timeout)
 	end
 
-	local r,err,partial = receive_ll(self, pattern)
+	local r,err,partial = receive_ll(self, pattern, ...)
 
 	if self.rtimer then
 		self.rtimer:cancel()
