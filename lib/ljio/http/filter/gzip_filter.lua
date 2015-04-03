@@ -124,8 +124,10 @@ function M.body_filter(rsp, ...)
 				assert(buf.eof)
 				zlib.deflateEnd(gzip.strm)
 			end
-			buf:swap(str)
-			local ret,err = M.next_body_filter(rsp, buf)
+			local buf2 = rsp.bufpool:get(str)
+			buf2.eof = buf.eof
+			buf2.flush = buf.flush
+			local ret,err = M.next_body_filter(rsp, buf2)
 			if err then return ret,err end
 		end
 	end

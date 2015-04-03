@@ -145,7 +145,7 @@ function tcp_mt.__index.settimeout(self, msec)
 	self.timeout = msec / 1000
 end
 
-local function receive_ll(self, pattern, ...)
+local function receive_ll(self, pattern, extra)
 	if not self.rbuf then
 		local buf = C.realloc(nil, READ_CHUNK_SIZE)
 		local p = ffi.cast("char*", buf)
@@ -156,7 +156,7 @@ local function receive_ll(self, pattern, ...)
 	pattern = pattern or "*l"
 	local typ = type(pattern)
 
-	while true do
+	--while true do
 		local avaliable = rbuf.rp - rbuf.cp2
 		local no_quota = false
 
@@ -196,7 +196,7 @@ local function receive_ll(self, pattern, ...)
 				end
 			elseif typ == "function" then
 				local cp = rbuf.cp2
-				local r,err = pattern(self.rbuf, avaliable, ...)
+				local r,err = pattern(self.rbuf, avaliable, extra)
 				self.stats.consume = self.stats.consume + (rbuf.cp2 - cp)
 				if r or err then
 					rbuf.cp1 = rbuf.cp2
@@ -249,7 +249,8 @@ local function receive_ll(self, pattern, ...)
 			end
 		end
 
-		while true do
+		--while true do
+		::hook_read::
 			if self.rtimedout then
 				local s = ffi.string(rbuf.cp1, rbuf.cp2 - rbuf.cp1)
 				rbuf.cp1 = rbuf.cp2
@@ -271,35 +272,36 @@ local function receive_ll(self, pattern, ...)
 				return nil, err, s
 			end
 
-			if len > 0 then
-				break
+			if len <= 0 then
+				goto hook_read
 			end
-		end
-	end
+		--end
+		return receive_ll(self, pattern, extra)
+	--end
 end
 
-function tcp_mt.__index.receive(self, pattern, ...)
+function tcp_mt.__index.receive(self, pattern, extra)
 	if self.closed then return nil, "closed" end
 
 	if self.reading then return nil,"socket busy reading" end
 	self.reading = true
 
-	self.rtimedout = false
-	if self.timeout and self.timeout > 0 then
-		self.rtimer = timer.add_timer(function()
-			self.rtimedout = true
-			if self[YIELD_R] then
-				coroutine.resume(self[YIELD_R])
-			end
-		end, self.timeout)
-	end
+	--self.rtimedout = false
+	--if self.timeout and self.timeout > 0 then
+	--	self.rtimer = timer.add_timer(function()
+	--		self.rtimedout = true
+	--		if self[YIELD_R] then
+	--			coroutine.resume(self[YIELD_R])
+	--		end
+	--	end, self.timeout)
+	--end
 
-	local r,err,partial = receive_ll(self, pattern, ...)
+	local r,err,partial = receive_ll(self, pattern, extra)
 
-	if self.rtimer then
-		self.rtimer:cancel()
-		self.rtimer = nil
-	end
+	--if self.rtimer then
+	--	self.rtimer:cancel()
+	--	self.rtimer = nil
+	--end
 
 	self.reading = false
 	return r,err,partial
@@ -487,22 +489,22 @@ end
 function tcp_mt.__index.send(self, ...)
 	if self.closed then return nil, 'fd closed' end
 
-	self.wtimedout = false
-	if self.timeout and self.timeout > 0 then
-		self.wtimer = timer.add_timer(function()
-			self.wtimedout = true
-			if self[YIELD_W] then
-				coroutine.resume(self[YIELD_W])
-			end
-		end, self.timeout)
-	end
+	--self.wtimedout = false
+	--if self.timeout and self.timeout > 0 then
+	--	self.wtimer = timer.add_timer(function()
+	--		self.wtimedout = true
+	--		if self[YIELD_W] then
+	--			coroutine.resume(self[YIELD_W])
+	--		end
+	--	end, self.timeout)
+	--end
 
 	local sent,err = send_ll(self, ...)
 
-	if self.wtimer then
-		self.wtimer:cancel()
-		self.wtimer = nil
-	end
+	--if self.wtimer then
+	--	self.wtimer:cancel()
+	--	self.wtimer = nil
+	--end
 
 	return sent,err
 end

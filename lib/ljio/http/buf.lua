@@ -4,7 +4,7 @@ local function calc_size(v)
 	local size = 0
 	local typ = type(v)
 	if typ == "table" then
-		for i,v2 in ipairs(v) do
+		for i, v2 in ipairs(v) do
 			local sz
 			v2, sz = calc_size(v2)
 			size = size + sz
@@ -16,56 +16,31 @@ local function calc_size(v)
 		end
 		size = size + #v
 	end
-	return v,size
+	return v, size
 end
 
 local buf_mt = {__index={}}
 
-function buf_mt.__index.append(self, ...)
-	for i = 1,select("#", ...) do
-		self._n = self._n + 1
-		local v,sz = calc_size(select(i, ...))
-		self[self._n] = v
+function buf_mt.__index.append(self, vv, ...)
+	--for i = 1, select("#", ...) do
+		--local vv = select(i, ...)
+		if vv then
+		local v, sz = calc_size(vv)
+		table.insert(self, v)
 		self.size = self.size + sz
+	--end
+	if select("#",...) > 0 then
+		return self:append(...)
 	end
 end
-
-function buf_mt.__index.swap(self, ...)
-	local n = select("#", ...)
-	for i = n+1, self._n do
-		self[i] = nil
-	end
-	self._n = 0
-	self.size = 0
-	return self:append(...)
 end
 
 local bufpool_mt = {__index={}}
 
 function bufpool_mt.__index.get(self, ...)
-	local buf = self._next
-	if buf == nil then
-		buf = setmetatable({_n=0,size=0}, buf_mt)
-	else
-		buf.is_file = nil
-		buf.path = nil
-		buf.offset = nil
-		buf.eof = nil
-		buf.flush = nil
-		self.n_buf = self.n_buf - 1
-		self._next = buf._next
-		buf._next = nil
-	end
-	buf:swap(...)
+	local buf = setmetatable({size = 0}, buf_mt)
+	buf:append(...)
 	return buf
-end
-
-function bufpool_mt.__index.put(self, buf)
-	if self.n_buf < self.max then
-		buf._next = self._next
-		self._next = buf
-		self.n_buf = self.n_buf + 1
-	end
 end
 
 return function(max)

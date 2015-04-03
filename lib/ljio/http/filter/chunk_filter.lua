@@ -38,7 +38,7 @@ function M.body_filter(rsp, ...)
 			if err then return ret,err end
 		else
 			if buf.eof then
-				buf:swap(eof)
+				buf:append(eof)
 			end
 			local ret,err = M.next_body_filter(rsp, buf)
 			if err then return ret,err end

@@ -292,9 +292,7 @@ function http_req_mt.__index.discard_body(self)
 	end
 
 	assert(self.sock.read_quota)
-	if self.sock.stats.consume == self.sock.read_quota then
-		return
-	end
+	if self.sock.stats.consume < self.sock.read_quota then
 
 	local sock = self.sock
 	local rbuf = sock.rbuf
@@ -323,6 +321,7 @@ function http_req_mt.__index.discard_body(self)
 
 	assert(sock:receive("*a") == "")
 	sock.hook.read = read_hook
+end
 end
 
 function http_req_mt.__index.get_uri_args(self)
@@ -554,7 +553,7 @@ local hash_mt = {
         if value ~= nil and rawget(tbl, key) == nil then
             rawset(tbl, #tbl + 1, key)
         end
-        return rawset(tbl, key, value)
+        rawset(tbl, key, value)
     end
 }
 
@@ -900,9 +899,9 @@ end
 local function finalize_conn(sock, status, body)
 	local body = body or special_rsp[status]
 	sock:send(status_tbl[status],
-		"server: luajit.io\r\ncontent-type: text/html\r\n",
+		"server: luajit.io\r\ncontent-type: text/plain\r\n",
 		"content-length: " .. #body .. "\r\n",
-		"date: " .. http_time() .. "\r\nconnection: close\r\n\r\n",
+		"date: " .. http_time() .. "\r\nconnection: keep-alive\r\n\r\n",
 		body)
 end
 
@@ -915,14 +914,16 @@ local function http_handler(sock)
 			if err ~= "closed" then
 				finalize_conn(sock, err)
 			end
-			return
+			break
 		end
 
 		local rsp = http_rsp_new(req, sock)
 
+		--finalize_conn(req.sock, 200, "hello world!\n")
 		sock.read_quota = sock.stats.consume + (req.headers["content-length"] or 0)
 		handle_http_request(req, rsp)
 		sock.read_quota = nil
+		--return http_handler(sock)
 	end
 end
 

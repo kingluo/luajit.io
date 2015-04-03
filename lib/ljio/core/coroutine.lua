@@ -112,8 +112,15 @@ local function co_resume_ll(co, ret, ...)
 end
 
 local function co_resume(co, ...)
-	if co_info[co] == nil then
+	local cinfo = co_info[co]
+	if cinfo == nil then
 		return false, "coroutine not exist"
+	end
+
+	local fn = cinfo.fn
+	if fn then
+		cinfo.fn = nil
+		return co_resume_ll(co, coroutine_resume(co, fn, ...))
 	end
 
 	return co_resume_ll(co, coroutine_resume(co, ...))
@@ -139,19 +146,22 @@ local function co_idle()
 	return coroutine_yield()
 end
 
+
+local function co_function(fn, ...)
+	local G = {}
+	G._G = G
+	setmetatable(G, co_mt)
+	setfenv(0, G)
+	setfenv(1, G)
+	return fn(...)
+end
+
 local function co_create(fn, gc)
 	local parent = coroutine_running()
 
-	local co = coroutine_create(function(...)
-		local G = {}
-		G._G = G
-		setmetatable(G, co_mt)
-		setfenv(0, G)
-		setfenv(1, G)
-		return fn(...)
-	end)
+	local co = coroutine_create(co_function)
 
-	local cinfo = {parent = parent, gc = gc}
+	local cinfo = {parent = parent, fn = fn, gc = gc}
 
 	co_info[co] = cinfo
 
@@ -183,6 +193,16 @@ local function co_sleep(sec)
 	return coroutine_yield()
 end
 
+
+local function wait_handler()
+	for co,flag in pairs(co_wait_list) do
+		if flag and co_info[co] then
+			co_resume(co)
+		end
+	end
+	return -1
+end
+
 local epoll_wait_hook_registered = false
 local function co_wait(...)
 	local parent = coroutine_running()
@@ -190,7 +210,7 @@ local function co_wait(...)
 	local n = select('#', ...)
 	assert(n > 0)
 
-	while true do
+	--while true do
 		for i = 1, n do
 			local co = select(i, ...)
 			local vals = co_info[parent].exit_childs and co_info[parent].exit_childs[co] or nil
@@ -205,21 +225,25 @@ local function co_wait(...)
 		end
 
 		if epoll_wait_hook_registered == false then
-			epoll.add_prepare_hook(function()
-				for co,flag in pairs(co_wait_list) do
-					if flag and co_info[co] then
-						co_resume(co)
-					end
-				end
-				return -1
-			end)
+			epoll.add_prepare_hook(wait_handler)
 			epoll_wait_hook_registered = true
 		end
 
 		co_wait_list[parent] = false
 		coroutine_yield()
 		co_wait_list[parent] = nil
+		return co_wait(...)
+	--end
+end
+
+local function wait2_handler()
+	for co in pairs(co_wait_list2) do
+		local cinfo = co_info[co]
+		if cinfo and cinfo.descendants_n == 0 then
+			co_resume(co)
+		end
 	end
+	return -1
 end
 
 local epoll_wait_hook2_registered = false
@@ -233,15 +257,7 @@ local function wait_descendants()
 	end
 
 	if epoll_wait_hook2_registered == false then
-		epoll.add_prepare_hook(function()
-			for co in pairs(co_wait_list2) do
-				local cinfo = co_info[co]
-				if cinfo and cinfo.descendants_n == 0 then
-					co_resume(co)
-				end
-			end
-			return -1
-		end)
+		epoll.add_prepare_hook(wait2_handler)
 		epoll_wait_hook2_registered = true
 	end
 

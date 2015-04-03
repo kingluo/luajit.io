@@ -25,7 +25,7 @@ function M.header_filter(rsp)
 
 	buf:append("server: luajit.io\r\n")
 
-	buf:append("date: ", http_time(), "\r\n")
+	buf:append("date: " .. http_time() .. "\r\n")
 
 	if rsp.req.headers["connection"] == "close" then
 		buf:append("connection: close\r\n")
@@ -51,7 +51,6 @@ local function flush_body(rsp)
 	if rsp.buffers and rsp.buffers.size > 0 then
 		local ret,err = rsp.sock:send(rsp.buffers)
 
-		rsp.bufpool:put(rsp.buffers)
 		rsp.buffers = nil
 
 		if err then return nil,err end
@@ -78,7 +77,6 @@ function M.body_filter(rsp, ...)
 				rsp.buffers = buf
 			else
 				rsp.buffers:append(unpack(buf))
-				rsp.bufpool:put(buf)
 			end
 		end
 
