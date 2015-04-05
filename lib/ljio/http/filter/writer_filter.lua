@@ -2,93 +2,85 @@
 
 local http_time = require("ljio.core.utils").http_time
 local constants = require("ljio.http.constants")
+local array_append = require("ljio.http.buf").append
+local array_truncate = require("ljio.http.buf").truncate
+local calc_size = require("ljio.http.buf").calc_size
+
+local ipairs = ipairs
 local tinsert = table.insert
 
 local M = {}
 
 local postpone_output = 1460
-local eol = "\r\n"
-local sep = ": "
 
 function M.header_filter(rsp)
-	local lcf = rsp.req.lcf or rsp.req.srvcf
-	local buf = rsp.bufpool:get()
+	local buf = {nil, nil, nil, nil, nil, nil, nil, nil}
 
 	local status = constants.status_tbl[rsp.status]
-	buf:append(status)
+	tinsert(buf, status)
 
 	local headers = rsp.headers
 
 	if rsp.status ~= 304 and headers["content-type"] == nil then
-		buf:append("content-type: ", lcf.default_type, "\r\n")
+		local lcf = rsp.req.lcf or rsp.req.srvcf
+		array_append(buf, "content-type: ", lcf.default_type, "\r\n")
 	end
 
-	buf:append("server: luajit.io\r\n")
+	tinsert(buf, "server: luajit.io\r\n")
 
-	buf:append("date: " .. http_time() .. "\r\n")
+	tinsert(buf, "date: " .. http_time() .. "\r\n")
 
 	if rsp.req.headers["connection"] == "close" then
-		buf:append("connection: close\r\n")
+		tinsert(buf, "connection: close\r\n")
 	else
-		buf:append("connection: keep-alive\r\n")
+		tinsert(buf, "connection: keep-alive\r\n")
 	end
 
 	for _, key in ipairs(headers) do
 		if headers[key] then
-			buf:append(key, sep, headers[key], eol)
+			array_append(buf, key, ": ", headers[key], "\r\n")
 		end
 	end
 
-	buf:append(eol)
+	tinsert(buf, "\r\n")
 
-	rsp.buffers = buf
+	calc_size(buf)
+	rsp.buf = buf
 	rsp.headers_sent = true
 
 	return true
 end
 
 local function flush_body(rsp)
-	if rsp.buffers and rsp.buffers.size > 0 then
-		local ret,err = rsp.sock:send(rsp.buffers)
-
-		rsp.buffers = nil
-
-		if err then return nil,err end
+	if rsp.buf and rsp.buf.size > 0 then
+		local ret,err = rsp.sock:send(rsp.buf)
+		array_truncate(rsp.buf)
+		rsp.buf.size = 0
 		rsp.body_sent = true
+		if err then return nil,err end
 	end
 
 	return true
 end
 
-function M.body_filter(rsp, ...)
-	for i = 1, select("#", ...) do
-		local buf = select(i, ...)
-		local flush = buf.flush
-		local eof = buf.eof
+function M.body_filter(rsp, buf)
+	if buf.eof then
+		rsp.eof = true
+	end
 
-		if buf.is_file then
-			local ret,err = flush_body(rsp)
-			if err then return ret,err end
-			local ret,err = rsp.sock:sendfile(buf.path, buf.offset, buf.size)
-			if err then return ret,err end
-			rsp.bufpool:put(buf)
-		elseif buf.size > 0 then
-			if rsp.buffers == nil then
-				rsp.buffers = buf
-			else
-				rsp.buffers:append(unpack(buf))
-			end
-		end
+	if buf.is_file then
+		local ret,err = flush_body(rsp)
+		if err then return ret,err end
+		local ret,err = rsp.sock:sendfile(buf.path, buf.offset, buf.size)
+		if err then return ret,err end
+	elseif buf.size > 0 then
+		tinsert(rsp.buf, buf)
+		rsp.buf.size = rsp.buf.size + buf.size
+	end
 
-		if flush or eof or (rsp.buffers and rsp.buffers.size >= postpone_output) then
-			local ret,err = flush_body(rsp)
-			if err then return ret,err end
-		end
-
-		if eof then
-			rsp.eof = true
-			break
-		end
+	if buf.flush or buf.eof or (rsp.buf and rsp.buf.size >= postpone_output) then
+		local ret,err = flush_body(rsp)
+		if err then return ret,err end
 	end
 
 	return true

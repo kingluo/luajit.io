@@ -1,48 +1,51 @@
 -- Copyright (C) Jinhua Luo
 
-local function calc_size(v)
-	local size = 0
-	local typ = type(v)
-	if typ == "table" then
-		for i, v2 in ipairs(v) do
-			local sz
-			v2, sz = calc_size(v2)
-			size = size + sz
-			v[i] = v2
-		end
-	else
-		if typ ~= "string" then
+local select = select
+local type = type
+local tostring = tostring
+local rawset = rawset
+local tinsert = table.insert
+
+local function append(a, val, ...)
+    if type(val) ~= "string" then
+        val = tostring(val)
+    end
+    tinsert(a, val)
+    if select("#", ...) > 0 then
+        return append(a, ...)
+    end
+end
+
+local function truncate(a, idx)
+    if idx == nil then
+        idx = 1
+    end
+    for i = idx, #a do
+        rawset(a, i, nil)
+    end
+end
+
+local function calc_size(tbl, buf)
+	if buf == nil then
+		buf = tbl
+		buf.size = 0
+	end
+
+	for i = 1, #tbl do
+		local v = tbl[i]
+		local typ = type(v)
+		if typ == "table" then
+			calc_size(tbl, buf)
+		elseif typ ~= "string" then
 			v = tostring(v)
+			tbl[i] = v
 		end
-		size = size + #v
-	end
-	return v, size
-end
-
-local buf_mt = {__index={}}
-
-function buf_mt.__index.append(self, vv, ...)
-	--for i = 1, select("#", ...) do
-		--local vv = select(i, ...)
-		if vv then
-		local v, sz = calc_size(vv)
-		table.insert(self, v)
-		self.size = self.size + sz
-	--end
-	if select("#",...) > 0 then
-		return self:append(...)
+		buf.size = buf.size + #v
 	end
 end
-end
 
-local bufpool_mt = {__index={}}
-
-function bufpool_mt.__index.get(self, ...)
-	local buf = setmetatable({size = 0}, buf_mt)
-	buf:append(...)
-	return buf
-end
-
-return function(max)
-	return setmetatable({max=max,n_buf=0}, bufpool_mt)
-end
+return {
+	append = append,
+	truncate = truncate,
+	calc_size = calc_size,
+}

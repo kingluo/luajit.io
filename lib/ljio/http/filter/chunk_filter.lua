@@ -2,8 +2,8 @@
 
 local M = {}
 
+local format = string.format
 local tinsert = table.insert
-local strformat = string.format
 
 local eof = "0\r\n\r\n"
 local eol = "\r\n"
@@ -21,31 +21,22 @@ function M.header_filter(rsp)
 	return M.next_header_filter(rsp)
 end
 
-function M.body_filter(rsp, ...)
-	if not rsp.chunked then
-		return M.next_body_filter(rsp, ...)
-	end
-
-	for i=1,select("#", ...) do
-		local buf = select(i, ...)
+function M.body_filter(rsp, buf)
+	if rsp.chunked then
 		if buf.size > 0 then
-			local size = strformat("%X\r\n", buf.size)
-			buf:append(eol)
-			if buf.eof then
-				buf:append(eof)
-			end
-			local ret,err = M.next_body_filter(rsp, rsp.bufpool:get(size), buf)
-			if err then return ret,err end
-		else
-			if buf.eof then
-				buf:append(eof)
-			end
-			local ret,err = M.next_body_filter(rsp, buf)
-			if err then return ret,err end
+			local prefix = format("%X\r\n", buf.size)
+			tinsert(buf, 1, prefix)
+			tinsert(buf, eol)
+			buf.size = buf.size + #prefix + #eol
+		end
+
+		if buf.eof then
+			tinsert(buf, eof)
+			buf.size = buf.size + #eof
 		end
 	end
 
-	return true
+	return M.next_body_filter(rsp, buf)
 end
 
 return M

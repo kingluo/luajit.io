@@ -8,7 +8,8 @@ local filter = require("ljio.http.filter")
 local run_next_header_filter = filter.run_next_header_filter
 local run_next_body_filter = filter.run_next_body_filter
 
-local create_bufpool = require("ljio.http.buf")
+local calc_size = require("ljio.http.buf").calc_size
+
 local http_time = require("ljio.core.utils").http_time
 local constants = require("ljio.http.constants")
 local special_rsp = constants.special_rsp
@@ -38,8 +39,8 @@ local eol1 = byte("\r")
 local eol2 = byte("\n")
 
 local g_http_cfg
-local http_req_mt = {__index={}}
-local http_rsp_mt = {__index = {bufpool = create_bufpool(100)}}
+local http_req_mt = {__index = {}}
+local http_rsp_mt = {__index = {}}
 local sid_pool = 1
 local v_time_t = ffi.new("time_t[1]")
 local if_modified_tm = ffi.new("struct tm")
@@ -373,13 +374,15 @@ function http_rsp_mt.__index.send_headers(self)
 end
 
 function http_rsp_mt.__index.print(self, ...)
-	local buf = self.bufpool:get(...)
+	local buf = {...}
+	calc_size(buf)
 	return run_next_body_filter(self, buf)
 end
 
 function http_rsp_mt.__index.say(self, ...)
-	local buf = self.bufpool:get(...)
-	buf:append("\n")
+	local buf = {...}
+	tinsert(buf, "\n")
+	calc_size(buf)
 	return run_next_body_filter(self, buf)
 end
 
@@ -413,9 +416,7 @@ function http_rsp_mt.__index.sendfile(self, path, offset, size, eof, absolute)
 end
 
 function http_rsp_mt.__index.flush(self)
-	local buf = self.bufpool:get()
-	buf.flush = true
-	return run_next_body_filter(self, buf)
+	return run_next_body_filter(self, {flush = true, size = 0})
 end
 
 function http_rsp_mt.__index.finalize(self, status)
@@ -425,14 +426,14 @@ function http_rsp_mt.__index.finalize(self, status)
 	self.req:discard_body()
 
 	if status then self.status = status end
-	local buf = self.bufpool:get()
-	buf.eof = true
+	local buf = {eof = true, size = 0}
 	if not self.headers_sent and self.status ~= 200
 		and self.status ~= 304 and self.status ~= 204 and self.status > 200 then
 		local str = special_rsp[self.status]
 		self.headers["content-type"] = "text/html"
 		self.headers["content-length"] = #str
-		buf:append(str)
+		tinsert(buf, str)
+		buf.size = buf.size + #str
 	end
 	return run_next_body_filter(self, buf)
 end

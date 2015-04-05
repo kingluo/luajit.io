@@ -13,12 +13,12 @@ return {
 	run_next_header_filter = function(rsp)
 		return rsp.headers_sent or gzip.header_filter(rsp)
 	end,
-	run_next_body_filter = function(rsp, ...)
+	run_next_body_filter = function(rsp, buf)
 		if rsp.eof then return false, "eof" end
 		if not rsp.headers_sent then
 			local ret,err = gzip.header_filter(rsp)
 			if err then return ret,err end
 		end
-		return gzip.body_filter(rsp, ...)
+		return gzip.body_filter(rsp, buf)
 	end
 }

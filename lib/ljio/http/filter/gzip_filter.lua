@@ -63,9 +63,9 @@ local function compress_chunk(strm, size, flush)
 	return ret,tconcat(t)
 end
 
-function M.body_filter(rsp, ...)
+function M.body_filter(rsp, buf)
 	if not rsp.gzip then
-		return M.next_body_filter(rsp, ...)
+		return M.next_body_filter(rsp, buf)
 	end
 
 	local gzip = rsp.gzip
@@ -78,58 +78,54 @@ function M.body_filter(rsp, ...)
 			ZLIB_VERSION, ffi.sizeof(gzip.strm)) == C.Z_OK)
 	end
 
-	for i=1,select("#", ...) do
-		local buf = select(i, ...)
+	local flush = C.Z_NO_FLUSH
+	if buf.eof then
+		flush = C.Z_FINISH
+	elseif buf.flush then
+		flush = C.Z_SYNC_FLUSH
+	end
 
-		local flush = C.Z_NO_FLUSH
-		if buf.eof then
-			flush = C.Z_FINISH
-		elseif buf.flush then
-			flush = C.Z_SYNC_FLUSH
+	if buf.is_file then
+		assert(buf.size > 0)
+		local fd = C.open(buf.path, 0)
+		assert(fd > 0)
+		if buf.offset > 0 then
+			assert(C.lseek(fd, buf.offset, C.SEEK_SET) == buf.offset)
 		end
-
-		if buf.is_file then
-			assert(buf.size > 0)
-			local fd = C.open(buf.path, 0)
-			assert(fd > 0)
-			if buf.offset > 0 then
-				assert(C.lseek(fd, buf.offset, C.SEEK_SET) == buf.offset)
-			end
-			local size = buf.size
-			while true do
-				local chunksz = (size > CHUNK) and CHUNK or size
-				local sz = C.read(fd, buf_in, chunksz)
-				size = size - sz
-				local ret,str = compress_chunk(gzip.strm, sz, (size == 0) and flush or C.Z_NO_FLUSH)
-				if ret == C.Z_STREAM_END then
-					assert(buf.eof)
-					zlib.deflateEnd(gzip.strm)
-				end
-				local buf2 = rsp.bufpool:get(str)
-				if sz < chunksz or size == 0 then
-					buf2.flush = buf.flush
-					buf2.eof = buf.eof
-				end
-				local ret,err = M.next_body_filter(rsp, buf2)
-				if err then return ret,err end
-				if sz < chunksz or size == 0 then break end
-			end
-			assert(C.close(fd) == 0)
-			rsp.bufpool:put(buf)
-		else
-			assert(buf.size < CHUNK)
-			assert(copy_buf(buf) == buf.size)
-			local ret,str = compress_chunk(gzip.strm, buf.size, flush)
+		local size = buf.size
+		while true do
+			local chunksz = (size > CHUNK) and CHUNK or size
+			local sz = C.read(fd, buf_in, chunksz)
+			size = size - sz
+			local ret,str = compress_chunk(gzip.strm, sz, (size == 0) and flush or C.Z_NO_FLUSH)
 			if ret == C.Z_STREAM_END then
 				assert(buf.eof)
 				zlib.deflateEnd(gzip.strm)
 			end
 			local buf2 = rsp.bufpool:get(str)
-			buf2.eof = buf.eof
-			buf2.flush = buf.flush
+			if sz < chunksz or size == 0 then
+				buf2.flush = buf.flush
+				buf2.eof = buf.eof
+			end
 			local ret,err = M.next_body_filter(rsp, buf2)
 			if err then return ret,err end
+			if sz < chunksz or size == 0 then break end
 		end
+		assert(C.close(fd) == 0)
+		rsp.bufpool:put(buf)
+	else
+		assert(buf.size < CHUNK)
+		assert(copy_buf(buf) == buf.size)
+		local ret,str = compress_chunk(gzip.strm, buf.size, flush)
+		if ret == C.Z_STREAM_END then
+			assert(buf.eof)
+			zlib.deflateEnd(gzip.strm)
+		end
+		local buf2 = rsp.bufpool:get(str)
+		buf2.eof = buf.eof
+		buf2.flush = buf.flush
+		local ret,err = M.next_body_filter(rsp, buf2)
+		if err then return ret,err end
 	end
 
 	return true
