@@ -383,7 +383,7 @@ function http_rsp_mt.__index.say(self, ...)
 	local buf = {...}
 	tinsert(buf, "\n")
 	calc_size(buf)
-	return run_next_body_filter(self, buf)
+	run_next_body_filter(self, buf)
 end
 
 function http_rsp_mt.__index.sendfile(self, path, offset, size, eof, absolute)
@@ -878,7 +878,8 @@ local function handle_http_request(req, rsp)
 			end
 		end
 
-		local handler = coroutine.spawn(fn, nil, req, rsp)
+		local handler = coroutine.create(fn, nil)
+		coroutine.resume(handler, req, rsp)
 		local ret, err = coroutine.wait(handler)
 		if ret == false and err ~= "exit_group" and err ~= "exit" then
 			return rsp:finalize(500)
@@ -907,25 +908,23 @@ local function finalize_conn(sock, status, body)
 end
 
 local function http_handler(sock)
-	while true do
-		local req = http_req_new(sock)
-		local err = read_header(sock, req)
+	local req = http_req_new(sock)
+	local err = read_header(sock, req)
 
-		if err then
-			if err ~= "closed" then
-				finalize_conn(sock, err)
-			end
-			break
+	if err then
+		if err ~= "closed" then
+			finalize_conn(sock, err)
 		end
-
-		local rsp = http_rsp_new(req, sock)
-
-		--finalize_conn(req.sock, 200, "hello world!\n")
-		sock.read_quota = sock.stats.consume + (req.headers["content-length"] or 0)
-		handle_http_request(req, rsp)
-		sock.read_quota = nil
-		--return http_handler(sock)
+		return
 	end
+
+	local rsp = http_rsp_new(req, sock)
+
+	--finalize_conn(req.sock, 200, "hello world!\n")
+	sock.read_quota = sock.stats.consume + (req.headers["content-length"] or 0)
+	handle_http_request(req, rsp)
+	sock.read_quota = nil
+	return http_handler(sock)
 end
 
 local function run(cfg)

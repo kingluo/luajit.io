@@ -160,7 +160,7 @@ local function init_worker(conn_handler)
 				do_all_listen_sk(function(ssock) epoll.del_event(ssock.ev) end)
 				wait_listen_sk = false
 			end
-			coroutine.spawn(
+			local co = coroutine.create(
 				conn_handler,
 				function()
 					log("debug", "worker pid=", C.getpid(), " remove connection, fd=", sock.fd)
@@ -176,9 +176,9 @@ local function init_worker(conn_handler)
 						do_all_listen_sk(function(ssock) epoll.add_event(ssock.ev, C.EPOLLIN) end)
 						wait_listen_sk = true
 					end
-				end,
-				sock
+				end
 			)
+			coroutine.resume(co, sock)
 		end
 	end
 

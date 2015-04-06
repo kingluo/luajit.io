@@ -14,10 +14,8 @@ local M = {}
 local postpone_output = 1460
 
 function M.header_filter(rsp)
-	local buf = {nil, nil, nil, nil, nil, nil, nil, nil}
-
 	local status = constants.status_tbl[rsp.status]
-	tinsert(buf, status)
+	local buf = {status, "server: luajit.io\r\n", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil}
 
 	local headers = rsp.headers
 
@@ -25,8 +23,6 @@ function M.header_filter(rsp)
 		local lcf = rsp.req.lcf or rsp.req.srvcf
 		array_append(buf, "content-type: ", lcf.default_type, "\r\n")
 	end
-
-	tinsert(buf, "server: luajit.io\r\n")
 
 	tinsert(buf, "date: " .. http_time() .. "\r\n")
 
