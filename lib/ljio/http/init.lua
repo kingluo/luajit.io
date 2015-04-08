@@ -8,7 +8,7 @@ local filter = require("ljio.http.filter")
 local run_next_header_filter = filter.run_next_header_filter
 local run_next_body_filter = filter.run_next_body_filter
 
-local calc_size = require("ljio.http.buf").calc_size
+local copy_values = require("ljio.http.buf").copy_values
 
 local http_time = require("ljio.core.utils").http_time
 local constants = require("ljio.http.constants")
@@ -374,16 +374,13 @@ function http_rsp_mt.__index.send_headers(self)
 end
 
 function http_rsp_mt.__index.print(self, ...)
-	local buf = {...}
-	calc_size(buf)
-	return run_next_body_filter(self, buf)
+	local str = copy_values(nil, ...)
+	run_next_body_filter(self, str)
 end
 
 function http_rsp_mt.__index.say(self, ...)
-	local buf = {...}
-	tinsert(buf, "\n")
-	calc_size(buf)
-	run_next_body_filter(self, buf)
+	local str = copy_values("\n", ...)
+	run_next_body_filter(self, str)
 end
 
 function http_rsp_mt.__index.sendfile(self, path, offset, size, eof, absolute)
@@ -406,7 +403,6 @@ function http_rsp_mt.__index.sendfile(self, path, offset, size, eof, absolute)
 	end
 
 	local buf = self.bufpool:get()
-	buf.is_file = true
 	buf.path = path
 	buf.offset = offset or 0
 	buf.size = size
@@ -416,7 +412,7 @@ function http_rsp_mt.__index.sendfile(self, path, offset, size, eof, absolute)
 end
 
 function http_rsp_mt.__index.flush(self)
-	return run_next_body_filter(self, {flush = true, size = 0})
+	return run_next_body_filter(self, constants.flush)
 end
 
 function http_rsp_mt.__index.finalize(self, status)
@@ -426,16 +422,16 @@ function http_rsp_mt.__index.finalize(self, status)
 	self.req:discard_body()
 
 	if status then self.status = status end
-	local buf = {eof = true, size = 0}
+
 	if not self.headers_sent and self.status ~= 200
 		and self.status ~= 304 and self.status ~= 204 and self.status > 200 then
 		local str = special_rsp[self.status]
 		self.headers["content-type"] = "text/html"
 		self.headers["content-length"] = #str
-		tinsert(buf, str)
-		buf.size = buf.size + #str
+		run_next_body_filter(self, str)
 	end
-	return run_next_body_filter(self, buf)
+
+	return run_next_body_filter(self, constants.eof)
 end
 
 function http_rsp_mt.__index.exit(self, status)

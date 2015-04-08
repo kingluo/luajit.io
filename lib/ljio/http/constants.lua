@@ -1,5 +1,7 @@
 -- Copyright (C) Jinhua Luo
 
+local ffi = require("ffi")
+
 local status_tbl = {
 	[200] = "HTTP/1.1 200 OK\r\n";
 	[302] = "HTTP/1.1 302 Found\r\n";
@@ -45,4 +47,6 @@ local special_rsp = {
 return {
 	status_tbl = status_tbl,
 	special_rsp = special_rsp,
+	eof = ffi.new("char[1]"),
+	flush = ffi.new("char[1]"),
 }

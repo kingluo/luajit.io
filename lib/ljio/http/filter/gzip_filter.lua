@@ -63,9 +63,9 @@ local function compress_chunk(strm, size, flush)
 	return ret,tconcat(t)
 end
 
-function M.body_filter(rsp, buf)
+function M.body_filter(rsp, data)
 	if not rsp.gzip then
-		return M.next_body_filter(rsp, buf)
+		return M.next_body_filter(rsp, data)
 	end
 
 	local gzip = rsp.gzip

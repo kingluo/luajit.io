@@ -1,5 +1,7 @@
 -- Copyright (C) Jinhua Luo
 
+local constants = require("ljio.http.constants")
+
 local M = {}
 
 local format = string.format
@@ -21,22 +23,20 @@ function M.header_filter(rsp)
 	return M.next_header_filter(rsp)
 end
 
-function M.body_filter(rsp, buf)
+function M.body_filter(rsp, data)
 	if rsp.chunked then
-		if buf.size > 0 then
-			local prefix = format("%X\r\n", buf.size)
-			tinsert(buf, 1, prefix)
-			tinsert(buf, eol)
-			buf.size = buf.size + #prefix + #eol
-		end
-
-		if buf.eof then
-			tinsert(buf, eof)
-			buf.size = buf.size + #eof
+		local typ = type(data)
+		if typ ~= "cdata" then
+			local prefix = format("%X\r\n", typ == "string" and #data or data.size)
+			M.next_body_filter(rsp, prefix)
+			M.next_body_filter(rsp, data)
+			return M.next_body_filter(rsp, eol)
+		elseif data == constants.eof then
+			M.next_body_filter(rsp, eof)
 		end
 	end
 
-	return M.next_body_filter(rsp, buf)
+	return M.next_body_filter(rsp, data)
 end
 
 return M
