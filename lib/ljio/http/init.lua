@@ -380,7 +380,7 @@ end
 
 function http_rsp_mt.__index.say(self, ...)
 	local str = copy_values("\n", ...)
-	run_next_body_filter(self, str)
+	return run_next_body_filter(self, str)
 end
 
 function http_rsp_mt.__index.sendfile(self, path, offset, size, eof, absolute)
@@ -431,7 +431,7 @@ function http_rsp_mt.__index.finalize(self, status)
 		run_next_body_filter(self, str)
 	end
 
-	return run_next_body_filter(self, constants.eof)
+	return (run_next_body_filter(self, constants.eof))
 end
 
 function http_rsp_mt.__index.exit(self, status)
@@ -874,19 +874,20 @@ local function handle_http_request(req, rsp)
 			end
 		end
 
-		local handler = coroutine.create(fn, nil)
-		coroutine.resume(handler, req, rsp)
-		local ret, err = coroutine.wait(handler)
-		if ret == false and err ~= "exit_group" and err ~= "exit" then
-			return rsp:finalize(500)
-		end
+		--local handler = coroutine.create(fn, nil)
+		--coroutine.resume(handler, req, rsp)
+		--local ret, err = coroutine.wait(handler)
+		--if ret == false and err ~= "exit_group" and err ~= "exit" then
+		--	return rsp:finalize(500)
+		--end
 
-		coroutine.wait_descendants()
+		--coroutine.wait_descendants()
 
-		if rsp.exec == true then
-			rsp.exec = false
-			goto location_matching
-		end
+		--if rsp.exec == true then
+		--	rsp.exec = false
+		--	goto location_matching
+		--end
+		fn(req, rsp)
 
 		return rsp:finalize()
 	end

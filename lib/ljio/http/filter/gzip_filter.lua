@@ -29,7 +29,7 @@ function M.header_filter(rsp)
 		rsp.headers["content-length"] = nil
 		rsp.gzip = {}
 	end
-	return M.next_header_filter(rsp)
+	return (M.next_header_filter(rsp))
 end
 
 local function copy_buf(buf, size)
@@ -65,7 +65,7 @@ end
 
 function M.body_filter(rsp, data)
 	if not rsp.gzip then
-		return M.next_body_filter(rsp, data)
+		return (M.next_body_filter(rsp, data))
 	end
 
 	local gzip = rsp.gzip

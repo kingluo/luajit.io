@@ -11,43 +11,75 @@ local M = {}
 
 local postpone_output = 1460
 
+local server = "Server: luajit.io\r\n"
+local s_server = #server
+local ct = "content-type: "
+local s_ct = #ct
+local eol = "\r\n"
+local s_eol = #eol
+local date = "date: "
+local s_date = #date
+local conn_close = "connection: close\r\n"
+local s_conn_close = #conn_close
+local conn_keepalive = "connection: keep-alive\r\n"
+local s_conn_keepalive = #conn_keepalive
+local colon = ": "
+local s_colon = #colon
+
+local function copy_headers(rsp, buf, i, j)
+	i = i or 1
+	j = j or #rsp.headers
+	if i <= j then
+		local key = rsp.headers[i]
+		local v = rsp.headers[key]
+		if v then
+			tinsert(buf, key)
+			tinsert(buf, colon)
+			tinsert(buf, v)
+			tinsert(buf, eol)
+			buf.size = buf.size + #key + s_colon + #v + s_eol
+		end
+		if i < j then
+			return copy_headers(rsp, buf, i + 1, j)
+		end
+	end
+end
+
 function M.header_filter(rsp)
-	local buf = buf_get()
-	tinsert(buf, constants.status_tbl[rsp.status])
-	tinsert(buf, "server: luajit.io\r\n")
+	local status = constants.status_tbl[rsp.status]
+	local buf = {size = 0; status, server, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil}
+	--local buf = buf_get()
+	--buf.size = 0
+	--tinsert(buf, status)
+	--tinsert(buf, server) 
+	buf.size = buf.size + #status + s_server
 
 	if rsp.status ~= 304 and rsp.headers["content-type"] == nil then
 		local lcf = rsp.req.lcf or rsp.req.srvcf
-		tinsert(buf, "content-type: ")
+		tinsert(buf, ct)
 		tinsert(buf, lcf.default_type)
-		tinsert(buf, "\r\n")
+		tinsert(buf, eol)
+		buf.size = buf.size + s_ct + #lcf.default_type + s_eol
 	end
 
-	tinsert(buf, "date: ")
-	tinsert(buf, http_time())
-	tinsert(buf, "\r\n")
+	tinsert(buf, date)
+	local ht = http_time()
+	tinsert(buf, ht)
+	tinsert(buf, eol)
+	buf.size = buf.size + s_date + #ht + s_eol
 
 	if rsp.req.headers["connection"] == "close" then
-		tinsert(buf, "connection: close\r\n")
+		tinsert(buf, conn_close)
+		buf.size = buf.size + s_conn_close
 	else
-		tinsert(buf, "connection: keep-alive\r\n")
+		tinsert(buf, conn_keepalive)
+		buf.size = buf.size + s_conn_keepalive
 	end
 
-	for _, key in ipairs(rsp.headers) do
-		if rsp.headers[key] then
-			tinsert(buf, key)
-			tinsert(buf, ": ")
-			tinsert(buf, rsp.headers[key])
-			tinsert(buf, "\r\n")
-		end
-	end
+	copy_headers(rsp, buf)
 
-	tinsert(buf, "\r\n")
-
-	buf.size = 0
-	for i, v in ipairs(buf) do
-		buf.size = buf.size + #v
-	end
+	tinsert(buf, eol)
+	buf.size = buf.size + s_eol
 
 	rsp.buf = buf
 
@@ -59,15 +91,14 @@ end
 local function flush_body(rsp)
 	if rsp.buf.size > 0 then
 		local ret,err = rsp.sock:send(rsp.buf)
-		if rsp.eof then
-			rsp.buf:put()
-			rsp.buf = nil
-		else
-			rsp.buf.size = 0
-			for i, v in ipairs(rsp.buf) do
-				rsp.buf[i] = nil
-			end
-		end
+		rsp.buf = rsp.eof and nil or {size = 0; nil, nil, nil}
+		--if rsp.eof then
+		--	rsp.buf:put()
+		--	rsp.buf = nil
+		--else
+		--	rsp.buf:clear()
+		--	rsp.buf.size = 0
+		--end
 		rsp.body_sent = true
 		if err then return nil,err end
 	end

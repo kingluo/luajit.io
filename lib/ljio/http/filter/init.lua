@@ -19,6 +19,6 @@ return {
 			local ret,err = gzip.header_filter(rsp)
 			if err then return ret,err end
 		end
-		return gzip.body_filter(rsp, data)
+		return (gzip.body_filter(rsp, data))
 	end
 }

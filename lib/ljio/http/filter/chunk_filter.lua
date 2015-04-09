@@ -20,7 +20,7 @@ function M.header_filter(rsp)
 		rsp.headers["transfer-encoding"] = "chunked"
 		rsp.chunked = true
 	end
-	return M.next_header_filter(rsp)
+	return (M.next_header_filter(rsp))
 end
 
 function M.body_filter(rsp, data)
@@ -30,13 +30,13 @@ function M.body_filter(rsp, data)
 			local prefix = format("%X\r\n", typ == "string" and #data or data.size)
 			M.next_body_filter(rsp, prefix)
 			M.next_body_filter(rsp, data)
-			return M.next_body_filter(rsp, eol)
+			return (M.next_body_filter(rsp, eol))
 		elseif data == constants.eof then
 			M.next_body_filter(rsp, eof)
 		end
 	end
 
-	return M.next_body_filter(rsp, data)
+	return (M.next_body_filter(rsp, data))
 end
 
 return M
