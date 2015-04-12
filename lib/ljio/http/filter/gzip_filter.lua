@@ -1,5 +1,7 @@
 -- Copyright (C) Jinhua Luo
 
+local constants = require("ljio.http.constants")
+
 local M = {}
 
 local C = require("ljio.cdef")
@@ -29,28 +31,12 @@ function M.header_filter(rsp)
 		rsp.headers["content-length"] = nil
 		rsp.gzip = {}
 	end
-	return (M.next_header_filter(rsp))
+	return M.next_header_filter(rsp)
 end
 
-local function copy_buf(buf, size)
-	size = size or 0
-	for _,v in ipairs(buf) do
-		local typ = type(v)
-		if typ == "table" then
-			size = copy_buf(v, size)
-		else
-			ffi.copy(buf_in + size, v, #v)
-			size = size + #v
-		end
-	end
-	return size
-end
-
-local function compress_chunk(strm, size, flush)
+local function compress_chunk(strm, flush)
 	local t = {}
 	local ret
-	strm.avail_in = size
-	strm.next_in = buf_in
 	repeat
 		strm.avail_out = CHUNK
 		strm.next_out = buf_out
@@ -64,11 +50,12 @@ local function compress_chunk(strm, size, flush)
 end
 
 function M.body_filter(rsp, data)
-	if not rsp.gzip then
-		return (M.next_body_filter(rsp, data))
+	local gzip = rsp.gzip
+
+	if not gzip then
+		return M.next_body_filter(rsp, data)
 	end
 
-	local gzip = rsp.gzip
 	if not gzip.strm then
 		gzip.strm = ffi.new("z_stream")
 		local lcf = rsp.req.lcf or rsp.req.srvcf
@@ -78,54 +65,57 @@ function M.body_filter(rsp, data)
 			ZLIB_VERSION, ffi.sizeof(gzip.strm)) == C.Z_OK)
 	end
 
-	local flush = C.Z_NO_FLUSH
-	if buf.eof then
-		flush = C.Z_FINISH
-	elseif buf.flush then
-		flush = C.Z_SYNC_FLUSH
-	end
-
-	if buf.is_file then
-		assert(buf.size > 0)
-		local fd = C.open(buf.path, 0)
+	local typ = type(data)
+	if typ == "table" then
+		assert(data.size > 0)
+		local fd = C.open(data.path, 0)
 		assert(fd > 0)
-		if buf.offset > 0 then
-			assert(C.lseek(fd, buf.offset, C.SEEK_SET) == buf.offset)
+		if data.offset > 0 then
+			assert(C.lseek(fd, data.offset, C.SEEK_SET) == data.offset)
 		end
-		local size = buf.size
+		local size = data.size
 		while true do
 			local chunksz = (size > CHUNK) and CHUNK or size
 			local sz = C.read(fd, buf_in, chunksz)
 			size = size - sz
-			local ret,str = compress_chunk(gzip.strm, sz, (size == 0) and flush or C.Z_NO_FLUSH)
+			gzip.strm.avail_in = sz
+			gzip.strm.next_in = buf_in
+			local ret,str = compress_chunk(gzip.strm, (size == 0) and C.Z_SYNC_FLUSH or C.Z_NO_FLUSH)
 			if ret == C.Z_STREAM_END then
-				assert(buf.eof)
 				zlib.deflateEnd(gzip.strm)
 			end
-			local buf2 = rsp.bufpool:get(str)
-			if sz < chunksz or size == 0 then
-				buf2.flush = buf.flush
-				buf2.eof = buf.eof
-			end
-			local ret,err = M.next_body_filter(rsp, buf2)
+			local ret,err = M.next_body_filter(rsp, str)
 			if err then return ret,err end
 			if sz < chunksz or size == 0 then break end
 		end
 		assert(C.close(fd) == 0)
-		rsp.bufpool:put(buf)
 	else
-		assert(buf.size < CHUNK)
-		assert(copy_buf(buf) == buf.size)
-		local ret,str = compress_chunk(gzip.strm, buf.size, flush)
+		if typ == "string" then
+			gzip.strm.avail_in = #data
+			gzip.strm.next_in = ffi.cast("char*", data)
+		else
+			gzip.strm.avail_in = 0
+		end
+
+		local flush = C.Z_NO_FLUSH
+		if data == constants.eof then
+			flush = C.Z_FINISH
+		elseif data == constants.flush then
+			flush = C.Z_SYNC_FLUSH
+		end
+
+		local ret,str = compress_chunk(gzip.strm, flush)
 		if ret == C.Z_STREAM_END then
-			assert(buf.eof)
 			zlib.deflateEnd(gzip.strm)
 		end
-		local buf2 = rsp.bufpool:get(str)
-		buf2.eof = buf.eof
-		buf2.flush = buf.flush
-		local ret,err = M.next_body_filter(rsp, buf2)
+
+		local ret,err = M.next_body_filter(rsp, str)
 		if err then return ret,err end
+
+		if typ ~= "string" then
+			local ret,err = M.next_body_filter(rsp, data)
+			if err then return ret,err end
+		end
 	end
 
 	return true

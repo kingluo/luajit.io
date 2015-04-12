@@ -36,6 +36,31 @@ require("ljio.http") {
 	client_body_timeout = 60,
 	client_max_body_size = 1 * 1024 * 1024,
 
+	-- Server blocks
+	-- Refer to http://nginx.org/en/docs/http/request_processing.html
+	{
+		listen = {
+			{port = 80, default_server = true},
+		},
+		server_name = {"luajit.io"},
+		root = "/srv/myserver",
+		default_type = 'text/plain',
+		package_path = package.path
+			.. ";/srv/myserver/WEB-INF/lib/?.lua;/srv/myserver/WEB-INF/lib/?/init.lua",
+		location = {
+			-- Refer to http://nginx.org/en/docs/http/ngx_http_core_module.html#location
+			-- Besides nginx modifiers, two new modifiers are added:
+			-- "^" explicitly indicates longest prefix matching
+			-- "f" function for arbitrary matching, with same priority as regexp matching
+			--
+			-- {<modifier>, (<pattern> | <function>), (<module> | <function>), ...}
+			--
+			{"=", "/", function(req, rsp) return rsp:exec("/index.html") end},
+			{"=", "/demo/tryredis/exec", "ljio.demo.tryredis"},
+			{"~*", "%.luax$", "ljio.http.luax", luax_prefix = "/WEB-INF/luax/"},
+			{"^~", "/WEB-INF/", function(req, rsp) return rsp:finalize(403) end},
+		}
+	},
 	{
 		listen = {
 			{port = 80},

@@ -375,7 +375,7 @@ end
 
 function http_rsp_mt.__index.print(self, ...)
 	local str = copy_values(nil, ...)
-	run_next_body_filter(self, str)
+	return run_next_body_filter(self, str)
 end
 
 function http_rsp_mt.__index.say(self, ...)
@@ -402,13 +402,12 @@ function http_rsp_mt.__index.sendfile(self, path, offset, size, eof, absolute)
 		return 0
 	end
 
-	local buf = self.bufpool:get()
-	buf.path = path
-	buf.offset = offset or 0
-	buf.size = size
-	buf.eof = eof
+	if not eof then
+		return run_next_body_filter(self, {path = path, offset = offset or 0, size = size})
+	end
 
-	return run_next_body_filter(self, buf)
+	run_next_body_filter(self, {path = path, offset = offset or 0, size = size})
+	return run_next_body_filter(self, constants.eof)
 end
 
 function http_rsp_mt.__index.flush(self)
@@ -431,7 +430,7 @@ function http_rsp_mt.__index.finalize(self, status)
 		run_next_body_filter(self, str)
 	end
 
-	return (run_next_body_filter(self, constants.eof))
+	return run_next_body_filter(self, constants.eof)
 end
 
 function http_rsp_mt.__index.exit(self, status)
@@ -845,7 +844,8 @@ local function handle_http_request(req, rsp)
 				elseif modifier == "~*" then
 					req.match_data = match_aux(match(lower(path), pat))
 				elseif modifier == "f"  then
-					local checker = coroutine.spawn(pat, nil, req)
+					local checker = coroutine.create(pat)
+					coroutine.resume(checker, req)
 					req.match_data = match_aux(select(2, coroutine.wait(checker)))
 				end
 				if req.match_data then
@@ -874,20 +874,19 @@ local function handle_http_request(req, rsp)
 			end
 		end
 
-		--local handler = coroutine.create(fn, nil)
-		--coroutine.resume(handler, req, rsp)
-		--local ret, err = coroutine.wait(handler)
-		--if ret == false and err ~= "exit_group" and err ~= "exit" then
-		--	return rsp:finalize(500)
-		--end
+		local handler = coroutine.create(fn, nil)
+		coroutine.resume(handler, req, rsp)
+		local ret, err = coroutine.wait(handler)
+		if ret == false and err ~= "exit_group" and err ~= "exit" then
+			return rsp:finalize(500)
+		end
 
-		--coroutine.wait_descendants()
+		coroutine.wait_descendants()
 
-		--if rsp.exec == true then
-		--	rsp.exec = false
-		--	goto location_matching
-		--end
-		fn(req, rsp)
+		if rsp.exec == true then
+			rsp.exec = false
+			goto location_matching
+		end
 
 		return rsp:finalize()
 	end

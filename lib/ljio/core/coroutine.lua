@@ -17,8 +17,6 @@ local co_wait_list2 = {}
 local co_idle_list = {}
 local co_info = {}
 
-local co_mt = {__index = getfenv(0)}
-
 local function remove_co(co)
 	local cinfo = co_info[co]
 
@@ -99,7 +97,7 @@ local function co_resume_ll(co, ret, ...)
 			else
 				error(err, 0)
 			end
-		elseif err ~= "exit" then
+		elseif err ~= "exit" and err ~= nil then
 			print(debug.traceback(co, err))
 		end
 	end
@@ -112,18 +110,24 @@ local function co_resume_ll(co, ret, ...)
 end
 
 local function co_resume(co, ...)
-	local cinfo = co_info[co]
-	if cinfo == nil then
+	if co_info[co] == nil then
 		return false, "coroutine not exist"
 	end
 
-	local fn = cinfo.fn
-	if fn then
-		cinfo.fn = nil
-		return co_resume_ll(co, coroutine_resume(co, fn, ...))
-	end
-
 	return co_resume_ll(co, coroutine_resume(co, ...))
+end
+
+local function idle_handler()
+	for co in pairs(co_idle_list) do
+		co_idle_list[co] = nil
+		co_resume(co)
+	end
+	local ret = -1
+	for co in pairs(co_idle_list) do
+		ret = 0
+		break
+	end
+	return ret
 end
 
 local epoll_idle_hook_registered = false
@@ -132,36 +136,36 @@ local function co_idle()
 	co_idle_list[co] = 1
 
 	if epoll_idle_hook_registered == false then
-		epoll.add_prepare_hook(function()
-			local n = 1
-			for co in pairs(co_idle_list) do
-				co_idle_list[co] = nil
-				co_resume(co)
-			end
-			return ((n > 0) and 1 or -1)
-		end)
+		epoll.add_prepare_hook(idle_handler)
 		epoll_idle_hook_registered = true
 	end
 
 	return coroutine_yield()
 end
 
-
-local function co_function(fn, ...)
-	local G = {}
-	G._G = G
-	setmetatable(G, co_mt)
-	setfenv(0, G)
-	setfenv(1, G)
-	return fn(...)
+local function wrap_fn(fn, gc)
+	return function(...)
+		local ret = {xpcall(fn, function(err)
+			if err ~= "exit" or err ~= "exit_group" then
+				print(debug.traceback(err, 2))
+			else
+				return err
+			end
+		end, ...)}
+		gc(ret)
+		if ret[1] == false then
+			error(ret[2])
+		end
+		return unpack(ret, 2)
+	end
 end
 
 local function co_create(fn, gc)
 	local parent = coroutine_running()
 
-	local co = coroutine_create(co_function)
+	local co = coroutine_create(gc and wrap_fn(fn, gc) or fn)
 
-	local cinfo = {parent = parent, fn = fn, gc = gc}
+	local cinfo = {parent = parent}
 
 	co_info[co] = cinfo
 
@@ -176,12 +180,6 @@ local function co_create(fn, gc)
 		ancestor.descendants_n = ancestor.descendants_n + 1
 	end
 
-	return co
-end
-
-local function co_spawn(fn, gc, ...)
-	local co = co_create(fn, gc)
-	co_resume(co, ...)
 	return co
 end
 
@@ -278,7 +276,6 @@ coroutine.create = co_create
 coroutine.resume = co_resume
 coroutine.wrap = co_wrap
 coroutine.exit = co_exit
-coroutine.spawn = co_spawn
 coroutine.wait = co_wait
 coroutine.wait_descendants = wait_descendants
 coroutine.kill = co_kill
@@ -286,10 +283,13 @@ coroutine.sleep = co_sleep
 coroutine.idle = co_idle
 
 -- local function test()
-	-- return 1,2,3
+	-- return 1, 2, 3
 -- end
 
--- for i = 1, 1000000 do
+-- local total = 0
+-- for i = 1, 5000000 do
 	-- local co = coroutine.create(test)
-	-- coroutine.resume(co)
+	-- local ret, v = coroutine.resume(co)
+	-- total = total + v
 -- end
+-- print(total)

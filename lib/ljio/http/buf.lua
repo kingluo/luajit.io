@@ -42,32 +42,19 @@ local function copy_values_ll(dst, v)
 	end
 end
 
-local tmptbl = {}
-
-local function copy_value(...)
+local function copy_value(tbl, ...)
 	local n = select("#", ...)
 	if n > 0 then
 		local v = ...
-		copy_values_ll(tmptbl, v)
+		copy_values_ll(tbl, v)
 		if n > 1 then
 			return copy_value(select(2, ...))
 		end
 	end
 end
 
-local function clear_tbl(tbl, i, j)
-	i = i or 1
-	j = j or #tbl
-	if i <= j then
-		tbl[i] = nil
-		if i < j then
-			return clear_tbl(tbl, i + 1, j)
-		end
-	end
-end
-
 local function copy_values(eol, ...)
-	tmptbl = {}
+	local tbl = {}
 
 	local n = select("#", ...)
 	if not eol and n == 1 then
@@ -84,37 +71,15 @@ local function copy_values(eol, ...)
 			return v
 		end
 	end
-	
-	copy_value(...)
+
+	copy_value(tbl, ...)
 	if eol then
-		tinsert(tmptbl, eol)
+		tinsert(tbl, eol)
 	end
 
-	return (tconcat(tmptbl))
-end
-
-local bufpool = {}
-local n_buf = 0
-
-local function put(self)
-	tinsert(bufpool, self)
-	n_buf = n_buf + 1
-end
-
-local buf_mt = { __index = {put = put, clear = clear_tbl} }
-
-local function get()
-	if n_buf > 0 then
-		local buf = tremove(bufpool)
-		buf:clear()
-		n_buf = n_buf - 1
-		return buf
-	else
-		return setmetatable({}, buf_mt)
-	end
+	return (tconcat(tbl))
 end
 
 return {
 	copy_values = copy_values,
-	get = get,
 }
