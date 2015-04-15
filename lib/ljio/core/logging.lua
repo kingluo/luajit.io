@@ -3,8 +3,6 @@
 local C = require("ljio.cdef")
 local bit = require("bit")
 
-local M = {}
-
 local tinsert = table.insert
 local tconcat = table.concat
 local bor = bit.bor
@@ -24,7 +22,7 @@ local levels = {
     debug = C.LOG_DEBUG,
 }
 
-function M.init(cfg)
+local function init(cfg)
     g_log_level = levels[cfg.log_level] or C.LOG_INFO
     g_flags = bor(C.LOG_PID, C.LOG_CONS, cfg.log_stderr and C.LOG_PERROR or 0)
     if opened then C.closelog() end
@@ -32,7 +30,7 @@ function M.init(cfg)
     opened = true
 end
 
-function M.log(level, ...)
+local function log(level, ...)
     level = levels[level]
     if level <= g_log_level then
         local t = {...}
@@ -50,8 +48,12 @@ function M.log(level, ...)
     end
 end
 
-function M.import_print()
+local function import_print()
     _G.print = function(...) log("notice", ...) end
 end
 
-return M
+return {
+    init = init,
+    log = log,
+    import_print = import_print,
+}
