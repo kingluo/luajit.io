@@ -18,10 +18,10 @@ enum {
 };
 
 typedef struct MD5state_st {
-	MD5_LONG A,B,C,D;
-	MD5_LONG Nl,Nh;
-	MD5_LONG data[MD5_LBLOCK];
-	unsigned int num;
+    MD5_LONG A,B,C,D;
+    MD5_LONG Nl,Nh;
+    MD5_LONG data[MD5_LBLOCK];
+    unsigned int num;
 } MD5_CTX;
 
 int MD5_Init(MD5_CTX *c);
@@ -56,23 +56,23 @@ function _M.reset(self)
 end
 
 return setmetatable({
-	new = new,
+    new = new,
 }, {
-	__call = function(func, ...)
-		local ctx = ffi_new(ctx_ptr_type)
-		if ssl.MD5_Init(ctx) == 0 then
-			return nil
-		end
-		for i=1,select('#', ...) do
-			local s = select(i, ...)
-			if ssl.MD5_Update(ctx, s, #s) ~= 1 then
-				return nil
-			end
-		end
-		if ssl.MD5_Final(buf, ctx) == 1 then
-			local s = ffi_str(buf, 16)
-			s = string.gsub(s,"(.)",function (x) return string.format("%.2x",string.byte(x)) end)
-			return s
-		end
-	end
+    __call = function(func, ...)
+        local ctx = ffi_new(ctx_ptr_type)
+        if ssl.MD5_Init(ctx) == 0 then
+            return nil
+        end
+        for i=1,select('#', ...) do
+            local s = select(i, ...)
+            if ssl.MD5_Update(ctx, s, #s) ~= 1 then
+                return nil
+            end
+        end
+        if ssl.MD5_Final(buf, ctx) == 1 then
+            local s = ffi_str(buf, 16)
+            s = string.gsub(s,"(.)",function (x) return string.format("%.2x",string.byte(x)) end)
+            return s
+        end
+    end
 })

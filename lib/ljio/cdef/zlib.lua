@@ -37,7 +37,7 @@ typedef struct z_stream_s {
 } z_stream;
 typedef z_stream *z_streamp;
 extern int deflateInit2_ (z_streamp strm, int level, int method,
-	int windowBits, int memLevel, int strategy, const char *version, int stream_size);
+    int windowBits, int memLevel, int strategy, const char *version, int stream_size);
 extern int deflateEnd (z_streamp strm);
 extern int deflate (z_streamp strm, int flush);
 uLong crc32 (uLong crc, const Bytef *buf, uInt len);

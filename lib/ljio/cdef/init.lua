@@ -1,7 +1,7 @@
 local ffi = require("ffi")
 
 if ffi.arch ~= "x86" and ffi.arch ~= "x64" then
-	error("arch not support: " .. ffi.arch)
+    error("arch not support: " .. ffi.arch)
 end
 
 require"ljio.cdef.base"

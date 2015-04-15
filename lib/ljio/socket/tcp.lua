@@ -35,826 +35,826 @@ local MAX_IOVCNT = 64
 local nodelay = ffi.new("int[1]", 1)
 
 local function sock_io_handler(ev, events)
-	local sock = ev.sock
-	assert(sock)
+    local sock = ev.sock
+    assert(sock)
 
-	if bit.band(events, C.EPOLLIN) ~= 0 then
-		if sock[YIELD_R] then
-			coroutine.resume(sock[YIELD_R])
-		end
-	end
+    if bit.band(events, C.EPOLLIN) ~= 0 then
+        if sock[YIELD_R] then
+            coroutine.resume(sock[YIELD_R])
+        end
+    end
 
-	if bit.band(events, C.EPOLLOUT) ~= 0 then
-		if sock[YIELD_W] then
-			coroutine.resume(sock[YIELD_W])
-		end
-	end
+    if bit.band(events, C.EPOLLOUT) ~= 0 then
+        if sock[YIELD_W] then
+            coroutine.resume(sock[YIELD_W])
+        end
+    end
 
-	if bit.band(events, C.EPOLLRDHUP) ~= 0 then
-		if sock[YIELD_R] then
-			coroutine.resume(sock[YIELD_R])
-			return
-		elseif sock[YIELD_W] then
-			coroutine.resume(sock[YIELD_W])
-			return
-		end
+    if bit.band(events, C.EPOLLRDHUP) ~= 0 then
+        if sock[YIELD_R] then
+            coroutine.resume(sock[YIELD_R])
+            return
+        elseif sock[YIELD_W] then
+            coroutine.resume(sock[YIELD_W])
+            return
+        end
 
-		-- no waiting coroutine
-		-- just unregister the event to avoid indefinite notify
-		if not ev.sock.closed then
-			epoll.del_event(ev)
-		end
+        -- no waiting coroutine
+        -- just unregister the event to avoid indefinite notify
+        if not ev.sock.closed then
+            epoll.del_event(ev)
+        end
 
-		-- if the sock resides in some pool,
-		-- then remove it from the pool and close it.
-		if sock.prev then
-			local pool
-			if sock.pname then pool = pools[sock.pname] end
-			if pool then
-				sock.next.prev = pool
-				pool.next = sock.next
-				pool.size = pool.size - 1
-				sock:close()
-			end
-		end
-	end
+        -- if the sock resides in some pool,
+        -- then remove it from the pool and close it.
+        if sock.prev then
+            local pool
+            if sock.pname then pool = pools[sock.pname] end
+            if pool then
+                sock.next.prev = pool
+                pool.next = sock.next
+                pool.size = pool.size - 1
+                sock:close()
+            end
+        end
+    end
 end
 
 local function socket_read(self, rbuf, size)
-	local len = C.read(self.fd, rbuf.rp, size)
-	local errno = ffi.errno()
+    local len = C.read(self.fd, rbuf.rp, size)
+    local errno = ffi.errno()
 
-	local err
-	if len > 0 then
-		rbuf.rp = rbuf.rp + len
-	elseif len == 0 then
-		self:close()
-		err = "closed"
-	elseif errno == C.EAGAIN then
-		self:yield(YIELD_R)
-	elseif errno ~= C.EINTR then
-		self:close()
-		err = utils.strerror(errno)
-	end
-	return len, err
+    local err
+    if len > 0 then
+        rbuf.rp = rbuf.rp + len
+    elseif len == 0 then
+        self:close()
+        err = "closed"
+    elseif errno == C.EAGAIN then
+        self:yield(YIELD_R)
+    elseif errno ~= C.EINTR then
+        self:close()
+        err = utils.strerror(errno)
+    end
+    return len, err
 end
 
 local function socket_writev(self, iovec, idx, iovcnt)
-	return C.writev(self.fd, iovec[idx], iovcnt)
+    return C.writev(self.fd, iovec[idx], iovcnt)
 end
 
 local function tcp_new(fd)
-	fd = fd or -1
-	local ev = {fd=fd, handler=sock_io_handler}
-	local sock = setmetatable({fd=fd, ev=ev, guard=utils.fd_guard(fd),
-		stats={rbytes=0,consume=0,wbytes=0}, hook={read=socket_read,write=socket_writev}}, tcp_mt)
-	ev.sock = sock
-	return sock
+    fd = fd or -1
+    local ev = {fd=fd, handler=sock_io_handler}
+    local sock = setmetatable({fd=fd, ev=ev, guard=utils.fd_guard(fd),
+        stats={rbytes=0,consume=0,wbytes=0}, hook={read=socket_read,write=socket_writev}}, tcp_mt)
+    ev.sock = sock
+    return sock
 end
 
 function tcp_mt.__index.yield(self, rw)
-	if self[rw] then return "sock waiting" end
-	self[rw] = coroutine.running()
-	coroutine.yield()
-	self[rw] = nil
+    if self[rw] then return "sock waiting" end
+    self[rw] = coroutine.running()
+    coroutine.yield()
+    self[rw] = nil
 end
 
 function tcp_mt.__index.yield_r(self)
-	return self:yield(YIELD_R)
+    return self:yield(YIELD_R)
 end
 
 function tcp_mt.__index.yield_w(self)
-	return self:yield(YIELD_W)
+    return self:yield(YIELD_W)
 end
 
 function tcp_mt.__index.close(self)
-	if not self.closed then
-		if self.hook.shutdown then
-			self.hook.shutdown(self)
-		end
-		C.close(self.fd)
-		self.guard.fd = -1
-		self.closed = true
-	else
-		return nil, "closed"
-	end
-	return 1
+    if not self.closed then
+        if self.hook.shutdown then
+            self.hook.shutdown(self)
+        end
+        C.close(self.fd)
+        self.guard.fd = -1
+        self.closed = true
+    else
+        return nil, "closed"
+    end
+    return 1
 end
 
 function tcp_mt.__index.settimeout(self, msec)
-	self.timeout = msec / 1000
+    self.timeout = msec / 1000
 end
 
 local function receive_ll(self, pattern, extra)
-	if not self.rbuf then
-		local buf = C.realloc(nil, READ_CHUNK_SIZE)
-		local p = ffi.cast("char*", buf)
-		self.rbuf = {buf=p, cp1=p, cp2=p, rp=p, size=READ_CHUNK_SIZE, gc=buf_gc(buf)}
-	end
+    if not self.rbuf then
+        local buf = C.realloc(nil, READ_CHUNK_SIZE)
+        local p = ffi.cast("char*", buf)
+        self.rbuf = {buf=p, cp1=p, cp2=p, rp=p, size=READ_CHUNK_SIZE, gc=buf_gc(buf)}
+    end
 
-	local rbuf = self.rbuf
-	pattern = pattern or "*l"
-	local typ = type(pattern)
+    local rbuf = self.rbuf
+    pattern = pattern or "*l"
+    local typ = type(pattern)
 
-	--while true do
-		local avaliable = rbuf.rp - rbuf.cp2
-		local no_quota = false
+    --while true do
+        local avaliable = rbuf.rp - rbuf.cp2
+        local no_quota = false
 
-		if self.read_quota and self.stats.rbytes >= self.read_quota then
-			local quota = self.read_quota - self.stats.consume
-			avaliable = quota - (rbuf.cp2 - rbuf.cp1)
-			no_quota = true
-		end
+        if self.read_quota and self.stats.rbytes >= self.read_quota then
+            local quota = self.read_quota - self.stats.consume
+            avaliable = quota - (rbuf.cp2 - rbuf.cp1)
+            no_quota = true
+        end
 
-		if avaliable > 0 then
-			if pattern == "*l" then
-				local cp = C.memchr(rbuf.cp2, eol2, avaliable)
-				cp = ffi.cast("char*", cp)
-				rbuf.cp2 = rbuf.cp2 + avaliable
-				if cp ~= nil then
-					local sz = cp - rbuf.cp1
-					self.stats.consume = self.stats.consume + sz + 1
-					if sz > 0 then
-						local p = cp - 1
-						if p[0] == eol1 then
-							sz = sz - 1
-						end
-					end
-					local str = ffi.string(rbuf.cp1, sz)
-					rbuf.cp2 = cp + 1
-					rbuf.cp1 = rbuf.cp2
-					return str
-				end
-			elseif typ == "number" then
-				rbuf.cp2 = rbuf.cp2 + avaliable
-				if rbuf.cp2 - rbuf.cp1 >= pattern then
-					local str = ffi.string(rbuf.cp1, pattern)
-					rbuf.cp1 = rbuf.cp1 + pattern
-					rbuf.cp2 = rbuf.cp1
-					self.stats.consume = self.stats.consume + pattern
-					return str
-				end
-			elseif typ == "function" then
-				local cp = rbuf.cp2
-				local r,err = pattern(self.rbuf, avaliable, extra)
-				self.stats.consume = self.stats.consume + (rbuf.cp2 - cp)
-				if r or err then
-					rbuf.cp1 = rbuf.cp2
-					return r,err
-				end
-			elseif pattern == "*a" then
-				rbuf.cp2 = rbuf.cp2 + avaliable
-			end
-		end
+        if avaliable > 0 then
+            if pattern == "*l" then
+                local cp = C.memchr(rbuf.cp2, eol2, avaliable)
+                cp = ffi.cast("char*", cp)
+                rbuf.cp2 = rbuf.cp2 + avaliable
+                if cp ~= nil then
+                    local sz = cp - rbuf.cp1
+                    self.stats.consume = self.stats.consume + sz + 1
+                    if sz > 0 then
+                        local p = cp - 1
+                        if p[0] == eol1 then
+                            sz = sz - 1
+                        end
+                    end
+                    local str = ffi.string(rbuf.cp1, sz)
+                    rbuf.cp2 = cp + 1
+                    rbuf.cp1 = rbuf.cp2
+                    return str
+                end
+            elseif typ == "number" then
+                rbuf.cp2 = rbuf.cp2 + avaliable
+                if rbuf.cp2 - rbuf.cp1 >= pattern then
+                    local str = ffi.string(rbuf.cp1, pattern)
+                    rbuf.cp1 = rbuf.cp1 + pattern
+                    rbuf.cp2 = rbuf.cp1
+                    self.stats.consume = self.stats.consume + pattern
+                    return str
+                end
+            elseif typ == "function" then
+                local cp = rbuf.cp2
+                local r,err = pattern(self.rbuf, avaliable, extra)
+                self.stats.consume = self.stats.consume + (rbuf.cp2 - cp)
+                if r or err then
+                    rbuf.cp1 = rbuf.cp2
+                    return r,err
+                end
+            elseif pattern == "*a" then
+                rbuf.cp2 = rbuf.cp2 + avaliable
+            end
+        end
 
-		if no_quota then
-			local s = ffi.string(rbuf.cp1, rbuf.cp2 - rbuf.cp1)
-			rbuf.cp1 = rbuf.cp2
-			self.stats.consume = self.stats.consume + #s
-			if pattern == "*a" then
-				return s
-			end
-			return nil, "closed", s
-		end
+        if no_quota then
+            local s = ffi.string(rbuf.cp1, rbuf.cp2 - rbuf.cp1)
+            rbuf.cp1 = rbuf.cp2
+            self.stats.consume = self.stats.consume + #s
+            if pattern == "*a" then
+                return s
+            end
+            return nil, "closed", s
+        end
 
-		-- adjust the buffer for next read
-		assert(rbuf.rp == rbuf.cp2)
-		local space = rbuf.size - (rbuf.rp - rbuf.buf)
-		assert(space >= 0)
-		if space < MIN_SPACE then
-			local reserved = rbuf.cp2 - rbuf.cp1
-			assert(reserved >= 0)
-			if (rbuf.size - reserved) >= MIN_SPACE then
-				if reserved > 0 then
-					C.memmove(rbuf.buf, rbuf.cp1, reserved)
-					rbuf.cp1 = rbuf.buf
-					rbuf.cp2 = rbuf.buf + reserved
-					rbuf.rp = rbuf.cp2
-				else
-					assert(rbuf.rp == rbuf.cp1)
-					rbuf.cp1 = rbuf.buf
-					rbuf.cp2 = rbuf.buf
-					rbuf.rp = rbuf.buf
-				end
-			else
-				local newsize = rbuf.size + READ_CHUNK_SIZE
-				local buf = C.realloc(rbuf.buf, newsize)
-				assert(buf ~= nil)
-				rbuf.buf = ffi.cast("char*", buf)
-				rbuf.gc.p = buf
-				rbuf.size = newsize
-				rbuf.cp1 = rbuf.buf
-				rbuf.cp2 = rbuf.buf + reserved
-				rbuf.rp = rbuf.cp2
-			end
-		end
+        -- adjust the buffer for next read
+        assert(rbuf.rp == rbuf.cp2)
+        local space = rbuf.size - (rbuf.rp - rbuf.buf)
+        assert(space >= 0)
+        if space < MIN_SPACE then
+            local reserved = rbuf.cp2 - rbuf.cp1
+            assert(reserved >= 0)
+            if (rbuf.size - reserved) >= MIN_SPACE then
+                if reserved > 0 then
+                    C.memmove(rbuf.buf, rbuf.cp1, reserved)
+                    rbuf.cp1 = rbuf.buf
+                    rbuf.cp2 = rbuf.buf + reserved
+                    rbuf.rp = rbuf.cp2
+                else
+                    assert(rbuf.rp == rbuf.cp1)
+                    rbuf.cp1 = rbuf.buf
+                    rbuf.cp2 = rbuf.buf
+                    rbuf.rp = rbuf.buf
+                end
+            else
+                local newsize = rbuf.size + READ_CHUNK_SIZE
+                local buf = C.realloc(rbuf.buf, newsize)
+                assert(buf ~= nil)
+                rbuf.buf = ffi.cast("char*", buf)
+                rbuf.gc.p = buf
+                rbuf.size = newsize
+                rbuf.cp1 = rbuf.buf
+                rbuf.cp2 = rbuf.buf + reserved
+                rbuf.rp = rbuf.cp2
+            end
+        end
 
-		--while true do
-		::hook_read::
-			if self.rtimedout then
-				local s = ffi.string(rbuf.cp1, rbuf.cp2 - rbuf.cp1)
-				rbuf.cp1 = rbuf.cp2
-				self.stats.consume = self.stats.consume + #s
-				return nil, "timeout", s
-			end
+        --while true do
+        ::hook_read::
+            if self.rtimedout then
+                local s = ffi.string(rbuf.cp1, rbuf.cp2 - rbuf.cp1)
+                rbuf.cp1 = rbuf.cp2
+                self.stats.consume = self.stats.consume + #s
+                return nil, "timeout", s
+            end
 
-			local len, err = self.hook.read(self, rbuf, rbuf.size - (rbuf.rp - rbuf.buf))
-			if len > 0 then
-				self.stats.rbytes = self.stats.rbytes + len
-			end
+            local len, err = self.hook.read(self, rbuf, rbuf.size - (rbuf.rp - rbuf.buf))
+            if len > 0 then
+                self.stats.rbytes = self.stats.rbytes + len
+            end
 
-			if err then
-				local s = ffi.string(rbuf.cp1, rbuf.cp2 - rbuf.cp1)
-				self.stats.consume = self.stats.consume + #s
-				if pattern == "*a" then
-					return s
-				end
-				return nil, err, s
-			end
+            if err then
+                local s = ffi.string(rbuf.cp1, rbuf.cp2 - rbuf.cp1)
+                self.stats.consume = self.stats.consume + #s
+                if pattern == "*a" then
+                    return s
+                end
+                return nil, err, s
+            end
 
-			if len <= 0 then
-				goto hook_read
-			end
-		--end
-		return receive_ll(self, pattern, extra)
-	--end
+            if len <= 0 then
+                goto hook_read
+            end
+        --end
+        return receive_ll(self, pattern, extra)
+    --end
 end
 
 function tcp_mt.__index.receive(self, pattern, extra)
-	if self.closed then return nil, "closed" end
+    if self.closed then return nil, "closed" end
 
-	if self.reading then return nil,"socket busy reading" end
-	self.reading = true
+    if self.reading then return nil,"socket busy reading" end
+    self.reading = true
 
-	--self.rtimedout = false
-	--if self.timeout and self.timeout > 0 then
-	--	self.rtimer = timer.add_timer(function()
-	--		self.rtimedout = true
-	--		if self[YIELD_R] then
-	--			coroutine.resume(self[YIELD_R])
-	--		end
-	--	end, self.timeout)
-	--end
+    --self.rtimedout = false
+    --if self.timeout and self.timeout > 0 then
+    --    self.rtimer = timer.add_timer(function()
+    --        self.rtimedout = true
+    --        if self[YIELD_R] then
+    --            coroutine.resume(self[YIELD_R])
+    --        end
+    --    end, self.timeout)
+    --end
 
-	local r,err,partial = receive_ll(self, pattern, extra)
+    local r,err,partial = receive_ll(self, pattern, extra)
 
-	--if self.rtimer then
-	--	self.rtimer:cancel()
-	--	self.rtimer = nil
-	--end
+    --if self.rtimer then
+    --    self.rtimer:cancel()
+    --    self.rtimer = nil
+    --end
 
-	self.reading = false
-	return r,err,partial
+    self.reading = false
+    return r,err,partial
 end
 
 function tcp_mt.__index.receiveuntil(self, pattern, options)
-	if not pattern or pattern == "" then return nil, "empty pattern" end
-	local inclusive = options and options.inclusive
+    if not pattern or pattern == "" then return nil, "empty pattern" end
+    local inclusive = options and options.inclusive
 
-	local dfa = dfa_compile(pattern)
-	local node = dfa.start
-	local data = ""
-	local reset = false
+    local dfa = dfa_compile(pattern)
+    local node = dfa.start
+    local data = ""
+    local reset = false
 
-	return function(size)
-		assert(size == nil or size > 0)
+    return function(size)
+        assert(size == nil or size > 0)
 
-		if reset then
-			reset = false
-			node = dfa.start
-			if size then
-				return nil
-			end
-		end
+        if reset then
+            reset = false
+            node = dfa.start
+            if size then
+                return nil
+            end
+        end
 
-		if size and size <= #data then
-			local r
-			r = strsub(data,1,size)
-			data = strsub(data,size+1)
-			if node == dfa.last and #data == 0 then
-				reset = true
-			end
-			return r
-		elseif node == dfa.last then
-			local r = data
-			data = ""
-			reset = true
-			return r
-		end
+        if size and size <= #data then
+            local r
+            r = strsub(data,1,size)
+            data = strsub(data,size+1)
+            if node == dfa.last and #data == 0 then
+                reset = true
+            end
+            return r
+        elseif node == dfa.last then
+            local r = data
+            data = ""
+            reset = true
+            return r
+        end
 
-		return self:receive(function(rbuf, avaliable)
-			local cp = rbuf.cp2
-			for i = 1,avaliable do
-				local c = ffi.string(rbuf.cp2, 1)
-				rbuf.cp2 = rbuf.cp2 + 1
-				node = node[c]
-				if not node then node = dfa.start
-				elseif node == dfa.last then break end
-			end
+        return self:receive(function(rbuf, avaliable)
+            local cp = rbuf.cp2
+            for i = 1,avaliable do
+                local c = ffi.string(rbuf.cp2, 1)
+                rbuf.cp2 = rbuf.cp2 + 1
+                node = node[c]
+                if not node then node = dfa.start
+                elseif node == dfa.last then break end
+            end
 
-			data = data .. ffi.string(cp, rbuf.cp2 - cp)
+            data = data .. ffi.string(cp, rbuf.cp2 - cp)
 
-			local r
-			local n_pat = node[3]
-			if node ~= dfa.last then
-				if size and size <= (#data - n_pat) then
-					r = strsub(data,1,size)
-					data = strsub(data,size+1)
-				end
-			else
-				if size then
-					local l = #data
-					if not inclusive then l = l - n_pat end
-					if size < l then
-						r = strsub(data,1,size)
-						data = strsub(data,size+1)
-					end
-				end
-				if not r then
-					if inclusive then r = data
-					else r = strsub(data,1, #data - n_pat) end
-					data = ""
-					reset = true
-				end
-			end
-			return r
-		end)
-	end
+            local r
+            local n_pat = node[3]
+            if node ~= dfa.last then
+                if size and size <= (#data - n_pat) then
+                    r = strsub(data,1,size)
+                    data = strsub(data,size+1)
+                end
+            else
+                if size then
+                    local l = #data
+                    if not inclusive then l = l - n_pat end
+                    if size < l then
+                        r = strsub(data,1,size)
+                        data = strsub(data,size+1)
+                    end
+                end
+                if not r then
+                    if inclusive then r = data
+                    else r = strsub(data,1, #data - n_pat) end
+                    data = ""
+                    reset = true
+                end
+            end
+            return r
+        end)
+    end
 end
 
 local function flatten_table(self, data, idx, bytes)
-	idx = idx or 0
-	bytes = bytes or 0
-	local iovec = self.iovec
+    idx = idx or 0
+    bytes = bytes or 0
+    local iovec = self.iovec
 
-	for i,v in ipairs(data) do
-		local typ = type(v)
-		if typ ~= "table" then
-			if typ ~= "string" then v = tostring(v) end
-			if idx == self.iovec_len then
-				-- realloc the iovec array
-				local old_iovec_len = self.iovec_len
-				self.iovec_len = self.iovec_len + MAX_IOVCNT
-				iovec = ffi.new("struct iovec[?]", self.iovec_len)
-				ffi.copy(iovec, self.iovec, ffi.sizeof("struct iovec") * old_iovec_len)
-				self.iovec = iovec
-			end
-			iovec[idx].iov_base = ffi.cast("void *", v)
-			local len = #v
-			iovec[idx].iov_len = len
-			bytes = bytes + len
-			idx = idx + 1
-		else
-			idx, bytes = flatten_table(self, v, idx, bytes)
-			if idx == nil then return nil end
-		end
-	end
+    for i,v in ipairs(data) do
+        local typ = type(v)
+        if typ ~= "table" then
+            if typ ~= "string" then v = tostring(v) end
+            if idx == self.iovec_len then
+                -- realloc the iovec array
+                local old_iovec_len = self.iovec_len
+                self.iovec_len = self.iovec_len + MAX_IOVCNT
+                iovec = ffi.new("struct iovec[?]", self.iovec_len)
+                ffi.copy(iovec, self.iovec, ffi.sizeof("struct iovec") * old_iovec_len)
+                self.iovec = iovec
+            end
+            iovec[idx].iov_base = ffi.cast("void *", v)
+            local len = #v
+            iovec[idx].iov_len = len
+            bytes = bytes + len
+            idx = idx + 1
+        else
+            idx, bytes = flatten_table(self, v, idx, bytes)
+            if idx == nil then return nil end
+        end
+    end
 
-	return idx, bytes
+    return idx, bytes
 end
 
 local function send_ll(self, ...)
-	if not self.iovec then
-		self.iovec = ffi.new("struct iovec[?]", MAX_IOVCNT)
-		self.iovec_len = MAX_IOVCNT
-	end
+    if not self.iovec then
+        self.iovec = ffi.new("struct iovec[?]", MAX_IOVCNT)
+        self.iovec_len = MAX_IOVCNT
+    end
 
-	-- collect and flatten the arguments
-	local n_iovec = 0
-	local bytes = 0
-	local data = select(1, ...)
-	local n_args = select("#", ...)
-	assert(n_args <= MAX_IOVCNT)
-	local typ = type(data)
-	if typ == "string" then
-		n_iovec = n_args
-		for i=0,n_args-1 do
-			local s = select(i+1, ...)
-			if type(s) ~= "string" then
-				return nil, "invalid argument"
-			end
-			self.iovec[i].iov_base = ffi.cast("void *", s)
-			local len = #s
-			self.iovec[i].iov_len = len
-			bytes = bytes + len
-		end
-	elseif typ == "table" then
-		if n_args > 1 then return nil, "invalid argument" end
-		n_iovec, bytes = flatten_table(self, data)
-	end
+    -- collect and flatten the arguments
+    local n_iovec = 0
+    local bytes = 0
+    local data = select(1, ...)
+    local n_args = select("#", ...)
+    assert(n_args <= MAX_IOVCNT)
+    local typ = type(data)
+    if typ == "string" then
+        n_iovec = n_args
+        for i=0,n_args-1 do
+            local s = select(i+1, ...)
+            if type(s) ~= "string" then
+                return nil, "invalid argument"
+            end
+            self.iovec[i].iov_base = ffi.cast("void *", s)
+            local len = #s
+            self.iovec[i].iov_len = len
+            bytes = bytes + len
+        end
+    elseif typ == "table" then
+        if n_args > 1 then return nil, "invalid argument" end
+        n_iovec, bytes = flatten_table(self, data)
+    end
 
-	if n_iovec == nil or n_iovec == 0 or bytes == nil or bytes == 0 then
-		return nil, "invalid argument"
-	end
+    if n_iovec == nil or n_iovec == 0 or bytes == nil or bytes == 0 then
+        return nil, "invalid argument"
+    end
 
-	-- do writev()
-	local iovec = self.iovec
-	local idx = 0
-	local sent = 0
-	while true do
-		if self.wtimedout then
-			return sent,"timeout"
-		end
-		local iovcnt = n_iovec % MAX_IOVCNT
-		if iovcnt == 0 then iovcnt = MAX_IOVCNT end
-		local len = self.hook.write(self, iovec, idx, iovcnt)
-		local errno = ffi.errno()
-		if len > 0 then
-			self.stats.wbytes = self.stats.wbytes + len
-			sent = sent + len
-			if sent == bytes then return sent end
-			for i=idx,idx+iovcnt-1 do
-				if iovec[i].iov_len <= len then
-					len = len - iovec[i].iov_len
-					idx = idx + 1
-					n_iovec = n_iovec - 1
-					if len == 0 then break end
-				else
-					iovec[i].iov_base = ffi.cast("char*", iovec[i].iov_base) + len
-					iovec[i].iov_len = iovec[i].iov_len - len
-					break
-				end
-			end
-		elseif errno == C.EAGAIN then
-			epoll.add_event(self.ev, C.EPOLLOUT)
-			self:yield(YIELD_W)
-			epoll.del_event(self.ev, C.EPOLLOUT)
-		elseif errno ~= C.EINTR then
-			self:close()
-			return nil, utils.strerror(errno)
-		end
-	end
+    -- do writev()
+    local iovec = self.iovec
+    local idx = 0
+    local sent = 0
+    while true do
+        if self.wtimedout then
+            return sent,"timeout"
+        end
+        local iovcnt = n_iovec % MAX_IOVCNT
+        if iovcnt == 0 then iovcnt = MAX_IOVCNT end
+        local len = self.hook.write(self, iovec, idx, iovcnt)
+        local errno = ffi.errno()
+        if len > 0 then
+            self.stats.wbytes = self.stats.wbytes + len
+            sent = sent + len
+            if sent == bytes then return sent end
+            for i=idx,idx+iovcnt-1 do
+                if iovec[i].iov_len <= len then
+                    len = len - iovec[i].iov_len
+                    idx = idx + 1
+                    n_iovec = n_iovec - 1
+                    if len == 0 then break end
+                else
+                    iovec[i].iov_base = ffi.cast("char*", iovec[i].iov_base) + len
+                    iovec[i].iov_len = iovec[i].iov_len - len
+                    break
+                end
+            end
+        elseif errno == C.EAGAIN then
+            epoll.add_event(self.ev, C.EPOLLOUT)
+            self:yield(YIELD_W)
+            epoll.del_event(self.ev, C.EPOLLOUT)
+        elseif errno ~= C.EINTR then
+            self:close()
+            return nil, utils.strerror(errno)
+        end
+    end
 end
 
 function tcp_mt.__index.send(self, ...)
-	if self.closed then return nil, 'fd closed' end
+    if self.closed then return nil, 'fd closed' end
 
-	--self.wtimedout = false
-	--if self.timeout and self.timeout > 0 then
-	--	self.wtimer = timer.add_timer(function()
-	--		self.wtimedout = true
-	--		if self[YIELD_W] then
-	--			coroutine.resume(self[YIELD_W])
-	--		end
-	--	end, self.timeout)
-	--end
+    --self.wtimedout = false
+    --if self.timeout and self.timeout > 0 then
+    --    self.wtimer = timer.add_timer(function()
+    --        self.wtimedout = true
+    --        if self[YIELD_W] then
+    --            coroutine.resume(self[YIELD_W])
+    --        end
+    --    end, self.timeout)
+    --end
 
-	local sent,err = send_ll(self, ...)
+    local sent,err = send_ll(self, ...)
 
-	--if self.wtimer then
-	--	self.wtimer:cancel()
-	--	self.wtimer = nil
-	--end
+    --if self.wtimer then
+    --    self.wtimer:cancel()
+    --    self.wtimer = nil
+    --end
 
-	return sent,err
+    return sent,err
 end
 
 function tcp_mt.__index.sendfile(self, path, offset, size)
-	local sent = 0
-	local err
+    local sent = 0
+    local err
 
-	if self.use_ssl then
-		local f = io.open(path)
-		if offset > 0 then f:seek(offset) end
-		while true do
-			local s = f:read(16*1024)
-			if s ~= nil then
-				local sent2
-				sent2,err = self:send(s)
-				sent = sent + sent2
-				if err then break end
-			else
-				f:close()
-				break
-			end
-		end
-	else
-		local fd = C.open(path, 0)
-		assert(fd > 0)
-		if offset > 0 then
-			assert(C.lseek(fd, offset, C.SEEK_SET) == offset)
-		end
+    if self.use_ssl then
+        local f = io.open(path)
+        if offset > 0 then f:seek(offset) end
+        while true do
+            local s = f:read(16*1024)
+            if s ~= nil then
+                local sent2
+                sent2,err = self:send(s)
+                sent = sent + sent2
+                if err then break end
+            else
+                f:close()
+                break
+            end
+        end
+    else
+        local fd = C.open(path, 0)
+        assert(fd > 0)
+        if offset > 0 then
+            assert(C.lseek(fd, offset, C.SEEK_SET) == offset)
+        end
 
-		while true do
-			local len = C.sendfile(self.fd, fd, nil, size)
-			local errno = ffi.errno()
+        while true do
+            local len = C.sendfile(self.fd, fd, nil, size)
+            local errno = ffi.errno()
 
-			if len > 0 then
-				size = size - len
-				sent = sent + len
-			end
+            if len > 0 then
+                size = size - len
+                sent = sent + len
+            end
 
-			if size == 0 then
-				break
-			end
+            if size == 0 then
+                break
+            end
 
-			if len == 0 then
-				err = "sendfile: socket broekn"
-				break
-			elseif errno == C.EAGAIN then
-				epoll.add_event(self.ev, C.EPOLLOUT)
-				self:yield(YIELD_W)
-				epoll.del_event(self.ev, C.EPOLLOUT)
-			elseif errno ~= C.EINTR then
-				err = ffi.string(C.strerror(errno))
-				break
-			end
-		end
+            if len == 0 then
+                err = "sendfile: socket broekn"
+                break
+            elseif errno == C.EAGAIN then
+                epoll.add_event(self.ev, C.EPOLLOUT)
+                self:yield(YIELD_W)
+                epoll.del_event(self.ev, C.EPOLLOUT)
+            elseif errno ~= C.EINTR then
+                err = ffi.string(C.strerror(errno))
+                break
+            end
+        end
 
-		assert(C.close(fd) == 0)
-	end
+        assert(C.close(fd) == 0)
+    end
 
-	return sent, err
+    return sent, err
 end
 
 local function create_tcp_socket(self)
-	assert(self.fd == -1)
-	local fd = C.socket(self.family, C.SOCKET_STREAM, 0)
-	assert(fd > 0)
-	utils.set_nonblock(fd)
-	if self.family == C.AF_INET then
-		assert(C.setsockopt(fd, C.IPPROTO_TCP, C.TCP_NODELAY, ffi.cast("void*", nodelay), ffi.sizeof("int")) == 0)
-	end
-	self.fd = fd
-	self.ev.fd = fd
-	self.guard.fd = fd
+    assert(self.fd == -1)
+    local fd = C.socket(self.family, C.SOCKET_STREAM, 0)
+    assert(fd > 0)
+    utils.set_nonblock(fd)
+    if self.family == C.AF_INET then
+        assert(C.setsockopt(fd, C.IPPROTO_TCP, C.TCP_NODELAY, ffi.cast("void*", nodelay), ffi.sizeof("int")) == 0)
+    end
+    self.fd = fd
+    self.ev.fd = fd
+    self.guard.fd = fd
 end
 
 function tcp_mt.__index.bind(self, ip, port)
-	local path = strmatch(ip, "unix:(.*)")
-	if path then
-		C.unlink(path)
-		self.family = C.AF_UNIX
-		ip = path
-	else
-		self.family = C.AF_INET
-	end
+    local path = strmatch(ip, "unix:(.*)")
+    if path then
+        C.unlink(path)
+        self.family = C.AF_UNIX
+        ip = path
+    else
+        self.family = C.AF_INET
+    end
 
-	create_tcp_socket(self)
+    create_tcp_socket(self)
 
-	local addr, addrlen
-	if self.family == C.AF_INET then
-		local option = ffi.new("int[1]", 1)
-		assert(C.setsockopt(self.fd, C.SOL_SOCKET, C.SO_REUSEADDR, ffi.cast("void*",option), ffi.sizeof("int")) == 0)
-		addr = ffi.new("struct sockaddr_in")
-		addr.sin_family = C.AF_INET
-		addr.sin_port = C.htons(tonumber(port))
-		C.inet_aton(ip, addr.sin_addr)
-		addrlen = ffi.sizeof(addr)
-	else
-		addr = ffi.new("struct sockaddr_un")
-		addr.sun_family = C.AF_UNIX
-		addr.sun_path = ip
-		addrlen = ffi.offsetof(addr, "sun_path") + #ip + 1
-	end
+    local addr, addrlen
+    if self.family == C.AF_INET then
+        local option = ffi.new("int[1]", 1)
+        assert(C.setsockopt(self.fd, C.SOL_SOCKET, C.SO_REUSEADDR, ffi.cast("void*",option), ffi.sizeof("int")) == 0)
+        addr = ffi.new("struct sockaddr_in")
+        addr.sin_family = C.AF_INET
+        addr.sin_port = C.htons(tonumber(port))
+        C.inet_aton(ip, addr.sin_addr)
+        addrlen = ffi.sizeof(addr)
+    else
+        addr = ffi.new("struct sockaddr_un")
+        addr.sun_family = C.AF_UNIX
+        addr.sun_path = ip
+        addrlen = ffi.offsetof(addr, "sun_path") + #ip + 1
+    end
 
-	if C.bind(self.fd, ffi.cast("struct sockaddr*",addr), addrlen) == -1 then
-		return nil, utils.strerror()
-	end
+    if C.bind(self.fd, ffi.cast("struct sockaddr*",addr), addrlen) == -1 then
+        return nil, utils.strerror()
+    end
 
-	self.ip = ip
-	self.port = port
-	return 1
+    self.ip = ip
+    self.port = port
+    return 1
 end
 
 function tcp_mt.__index.listen(self, backlog, handler)
-	if self.listening then return 1 end
-	backlog = backlog or 1000
-	local ret = C.listen(self.fd, backlog)
-	if ret ~= 0 then return nil, utils.strerror() end
-	self.ev.handler = handler
-	epoll.add_event(self.ev, C.EPOLLIN)
-	self.listening = true
-	return 1
+    if self.listening then return 1 end
+    backlog = backlog or 1000
+    local ret = C.listen(self.fd, backlog)
+    if ret ~= 0 then return nil, utils.strerror() end
+    self.ev.handler = handler
+    epoll.add_event(self.ev, C.EPOLLIN)
+    self.listening = true
+    return 1
 end
 
 function tcp_mt.__index.accept(self)
-	local addr
-	if self.family == C.AF_INET then
-		addr = ffi.new("struct sockaddr_in[1]")
-	else
-		addr = ffi.new("struct sockaddr_un[1]")
-	end
-	local len = ffi.new("unsigned int[1]", ffi.sizeof(addr))
-	local cfd = C.accept(self.fd, ffi.cast("struct sockaddr *",addr), len)
-	if cfd <= 0 then return nil, utils.strerror() end
+    local addr
+    if self.family == C.AF_INET then
+        addr = ffi.new("struct sockaddr_in[1]")
+    else
+        addr = ffi.new("struct sockaddr_un[1]")
+    end
+    local len = ffi.new("unsigned int[1]", ffi.sizeof(addr))
+    local cfd = C.accept(self.fd, ffi.cast("struct sockaddr *",addr), len)
+    if cfd <= 0 then return nil, utils.strerror() end
 
-	utils.set_nonblock(cfd)
-	local sock = tcp_new(cfd)
-	if self.linfo and self.linfo.ssl then
-		ssl.create_ssl(sock, self.srv.sslctx)
-		sock.hook.read = ssl.read
-		sock.hook.write = ssl.write
-		sock.hook.shutdown = ssl.shutdown
-		sock.use_ssl = true
-	end
-	if self.family == C.AF_INET then
-		local val = ffi.cast("unsigned short",C.ntohs(addr[0].sin_port))
-		sock.port = tonumber(val)
-		sock.ip = ffi.string(C.inet_ntoa(addr[0].sin_addr))
-	else
-		sock.ip = ffi.string(addr[0].sun_addr)
-	end
+    utils.set_nonblock(cfd)
+    local sock = tcp_new(cfd)
+    if self.linfo and self.linfo.ssl then
+        ssl.create_ssl(sock, self.srv.sslctx)
+        sock.hook.read = ssl.read
+        sock.hook.write = ssl.write
+        sock.hook.shutdown = ssl.shutdown
+        sock.use_ssl = true
+    end
+    if self.family == C.AF_INET then
+        local val = ffi.cast("unsigned short",C.ntohs(addr[0].sin_port))
+        sock.port = tonumber(val)
+        sock.ip = ffi.string(C.inet_ntoa(addr[0].sin_addr))
+    else
+        sock.ip = ffi.string(addr[0].sun_addr)
+    end
 
-	if self.ip == "*" then
-		assert(C.getsockname(cfd, ffi.cast("struct sockaddr *",addr), len) == 0)
-		sock.srv_ip = ffi.string(C.inet_ntoa(addr[0].sin_addr))
-	else
-		sock.srv_ip = self.ip
-	end
-	sock.srv_port = self.port or "unix"
-	epoll.add_event(sock.ev, C.EPOLLIN, C.EPOLLRDHUP, C.EPOLLET)
-	return sock
+    if self.ip == "*" then
+        assert(C.getsockname(cfd, ffi.cast("struct sockaddr *",addr), len) == 0)
+        sock.srv_ip = ffi.string(C.inet_ntoa(addr[0].sin_addr))
+    else
+        sock.srv_ip = self.ip
+    end
+    sock.srv_port = self.port or "unix"
+    epoll.add_event(sock.ev, C.EPOLLIN, C.EPOLLRDHUP, C.EPOLLET)
+    return sock
 end
 
 function tcp_mt.__index.setkeepalive(self, timeout, size)
-	if not self.pname then return nil, "not outgoing connection" end
+    if not self.pname then return nil, "not outgoing connection" end
 
-	local pool = pools[self.pname]
-	if not pool then
-		pools[self.pname] = {size=0, maxsize=size or 30}
-		pool = pools[self.pname]
-		pool.prev = pool
-		pool.next = pool
-	end
+    local pool = pools[self.pname]
+    if not pool then
+        pools[self.pname] = {size=0, maxsize=size or 30}
+        pool = pools[self.pname]
+        pool.prev = pool
+        pool.next = pool
+    end
 
-	-- tail insert
-	pool.prev.next = self
-	self.prev = pool.prev
-	self.next = pool
-	if pool.size + 1 > pool.maxsize then
-		-- remove the head (least recently used)
-		pool.next.next.prev = pool
-		pool.next = pool.next.next
-	else
-		pool.size = pool.size + 1
-	end
+    -- tail insert
+    pool.prev.next = self
+    self.prev = pool.prev
+    self.next = pool
+    if pool.size + 1 > pool.maxsize then
+        -- remove the head (least recently used)
+        pool.next.next.prev = pool
+        pool.next = pool.next.next
+    else
+        pool.size = pool.size + 1
+    end
 
-	timeout = timeout and (timeout / 1000) or 60
-	if timeout > 0 then
-		self.keepalive_timer = timer.add_timer(function()
-			self.next.prev = self.prev
-			self.prev.next = self.next
-			self:close()
-			pool.size = pool.size - 1
-		end, timeout)
-	end
-	self.closed = true
+    timeout = timeout and (timeout / 1000) or 60
+    if timeout > 0 then
+        self.keepalive_timer = timer.add_timer(function()
+            self.next.prev = self.prev
+            self.prev.next = self.next
+            self:close()
+            pool.size = pool.size - 1
+        end, timeout)
+    end
+    self.closed = true
 
-	return 1
+    return 1
 end
 
 function tcp_mt.__index.connect(self, host, port, options_table)
-	if self.connected then return nil, "already connected" end
+    if self.connected then return nil, "already connected" end
 
-	local path = strmatch(host, "unix:(.*)")
-	if path then
-		self.family = C.AF_UNIX
-		options_table = port
-		host = path
-	else
-		self.family = C.AF_INET
-	end
+    local path = strmatch(host, "unix:(.*)")
+    if path then
+        self.family = C.AF_UNIX
+        options_table = port
+        host = path
+    else
+        self.family = C.AF_INET
+    end
 
-	local pname
-	if options_table then pname = options_table.pool end
-	if not pname then
-		pname = host
-		if self.family == C.AF_INET then
-			pname = pname .. ":" .. port
-		end
-	end
-	self.pname = pname
+    local pname
+    if options_table then pname = options_table.pool end
+    if not pname then
+        pname = host
+        if self.family == C.AF_INET then
+            pname = pname .. ":" .. port
+        end
+    end
+    self.pname = pname
 
-	-- look up the connection pool first
-	local pool = pools[pname]
-	if pool and pool.size > 0 then
-		local sock = pool.next
-		sock.keepalive_timer:cancel()
-		sock.keepalive_timer = nil
+    -- look up the connection pool first
+    local pool = pools[pname]
+    if pool and pool.size > 0 then
+        local sock = pool.next
+        sock.keepalive_timer:cancel()
+        sock.keepalive_timer = nil
 
-		-- copy fields
-		self.ip = sock.ip
-		self.port = sock.port
-		self.fd = sock.fd
-		self.ev = sock.ev
-		self.ev.sock = self
-		self.guard = sock.guard
-		self.reusedtimes = sock.reusedtimes
-		if not self.reusedtimes then self.reusedtimes = 0 end
-		self.reusedtimes = self.reusedtimes + 1
-		self.connected = true
+        -- copy fields
+        self.ip = sock.ip
+        self.port = sock.port
+        self.fd = sock.fd
+        self.ev = sock.ev
+        self.ev.sock = self
+        self.guard = sock.guard
+        self.reusedtimes = sock.reusedtimes
+        if not self.reusedtimes then self.reusedtimes = 0 end
+        self.reusedtimes = self.reusedtimes + 1
+        self.connected = true
 
-		-- update the pool
-		sock.next.prev = pool
-		pool.next = sock.next
-		pool.size = pool.size - 1
-		return 1
-	end
+        -- update the pool
+        sock.next.prev = pool
+        pool.next = sock.next
+        pool.size = pool.size - 1
+        return 1
+    end
 
-	-- set connect timer
-	self.wtimedout = false
-	if self.timeout and self.timeout > 0 then
-		self.wtimer = timer.add_timer(function()
-			if self[YIELD_W] then
-				self.wtimedout = true
-				coroutine.resume(self[YIELD_W])
-			end
-		end, self.timeout)
-	end
+    -- set connect timer
+    self.wtimedout = false
+    if self.timeout and self.timeout > 0 then
+        self.wtimer = timer.add_timer(function()
+            if self[YIELD_W] then
+                self.wtimedout = true
+                coroutine.resume(self[YIELD_W])
+            end
+        end, self.timeout)
+    end
 
-	-- resolve host and/or port if needed
-	if self.family == C.AF_INET
-		and (strfind(host, "^%d+%.%d+%.%d+%.%d+$") == nil or type(port) ~= "number") then
-		self.resolve_key = dns.resolve(host, port, function(ip, port)
-			coroutine.resume(self[YIELD_W], ip, port)
-		end)
-		host, port = self:yield(YIELD_W)
-		local err
-		if self.wtimedout then
-			dns.cancel_resolve(self.resolve_key)
-			self.resolve_key = nil
-			err = "timeout"
-		elseif host == nil or port == nil then
-			err = "resolve failed"
-		end
-		if err then
-			if self.wtimer then
-				self.wtimer:cancel()
-				self.wtimer = nil
-			end
-			return nil, err
-		end
-	end
+    -- resolve host and/or port if needed
+    if self.family == C.AF_INET
+        and (strfind(host, "^%d+%.%d+%.%d+%.%d+$") == nil or type(port) ~= "number") then
+        self.resolve_key = dns.resolve(host, port, function(ip, port)
+            coroutine.resume(self[YIELD_W], ip, port)
+        end)
+        host, port = self:yield(YIELD_W)
+        local err
+        if self.wtimedout then
+            dns.cancel_resolve(self.resolve_key)
+            self.resolve_key = nil
+            err = "timeout"
+        elseif host == nil or port == nil then
+            err = "resolve failed"
+        end
+        if err then
+            if self.wtimer then
+                self.wtimer:cancel()
+                self.wtimer = nil
+            end
+            return nil, err
+        end
+    end
 
-	-- create a new socket
-	create_tcp_socket(self)
+    -- create a new socket
+    create_tcp_socket(self)
 
-	-- do non-blocking connect
-	self.ip = host
-	self.port = port
-	local addr, addrlen
-	if self.family == C.AF_INET then
-		addr = ffi.new("struct sockaddr_in")
-		addr.sin_family = C.AF_INET
-		addr.sin_port = C.htons(tonumber(port))
-		C.inet_aton(host, addr.sin_addr)
-		addrlen = ffi.sizeof(addr)
-	else
-		addr = ffi.new("struct sockaddr_un")
-		addr.sun_family = C.AF_UNIX
-		addr.sun_path = host
-		addrlen = ffi.offsetof(addr, "sun_path") + #host + 1
-	end
+    -- do non-blocking connect
+    self.ip = host
+    self.port = port
+    local addr, addrlen
+    if self.family == C.AF_INET then
+        addr = ffi.new("struct sockaddr_in")
+        addr.sin_family = C.AF_INET
+        addr.sin_port = C.htons(tonumber(port))
+        C.inet_aton(host, addr.sin_addr)
+        addrlen = ffi.sizeof(addr)
+    else
+        addr = ffi.new("struct sockaddr_un")
+        addr.sun_family = C.AF_UNIX
+        addr.sun_path = host
+        addrlen = ffi.offsetof(addr, "sun_path") + #host + 1
+    end
 
-	local err
+    local err
 
-	while true do
-		local ret = C.connect(self.fd, ffi.cast("struct sockaddr*",addr), addrlen)
-		local errno = ffi.errno()
-		if ret == 0 then break end
-		if errno == C.EINPROGRESS then
-			epoll.add_event(self.ev, C.EPOLLOUT)
-			self:yield(YIELD_W)
-			epoll.del_event(self.ev, C.EPOLLOUT)
-			if self.wtimedout then
-				err = "timeout"
-				break
-			end
-			local option = ffi.new("int[1]", 1)
-			local len = ffi.new("int[1]", 1)
-			assert(C.getsockopt(self.fd, C.SOL_SOCKET, C.SO_ERROR, ffi.cast("void*",option), len) == 0)
-			if option[0] ~= 0 then
-				err = utils.strerror(err)
-			end
-			break
-		elseif errno ~= EINTR then
-			err = utils.strerror(errno)
-			break
-		end
-	end
+    while true do
+        local ret = C.connect(self.fd, ffi.cast("struct sockaddr*",addr), addrlen)
+        local errno = ffi.errno()
+        if ret == 0 then break end
+        if errno == C.EINPROGRESS then
+            epoll.add_event(self.ev, C.EPOLLOUT)
+            self:yield(YIELD_W)
+            epoll.del_event(self.ev, C.EPOLLOUT)
+            if self.wtimedout then
+                err = "timeout"
+                break
+            end
+            local option = ffi.new("int[1]", 1)
+            local len = ffi.new("int[1]", 1)
+            assert(C.getsockopt(self.fd, C.SOL_SOCKET, C.SO_ERROR, ffi.cast("void*",option), len) == 0)
+            if option[0] ~= 0 then
+                err = utils.strerror(err)
+            end
+            break
+        elseif errno ~= EINTR then
+            err = utils.strerror(errno)
+            break
+        end
+    end
 
-	if self.wtimer then
-		self.wtimer:cancel()
-		self.wtimer = nil
-	end
+    if self.wtimer then
+        self.wtimer:cancel()
+        self.wtimer = nil
+    end
 
-	if err then
-		self:close()
-		return nil, err
-	end
+    if err then
+        self:close()
+        return nil, err
+    end
 
-	epoll.add_event(self.ev, C.EPOLLIN, C.EPOLLRDHUP, C.EPOLLET)
-	self.connected = true
-	return 1
+    epoll.add_event(self.ev, C.EPOLLIN, C.EPOLLRDHUP, C.EPOLLET)
+    self.connected = true
+    return 1
 end
 
 function tcp_mt.__index.getreusedtimes(self)
-	return self.reusedtimes or 0
+    return self.reusedtimes or 0
 end
 
 --#--
 
 return {
-	new = tcp_new,
+    new = tcp_new,
 }
