@@ -40,7 +40,7 @@ require("ljio.http") {
 	-- Refer to http://nginx.org/en/docs/http/request_processing.html
 	{
 		listen = {
-			{port = 80, default_server = true},
+			{port = 80},
 		},
 		server_name = {"luajit.io"},
 		root = "/srv/myserver",
@@ -63,7 +63,7 @@ require("ljio.http") {
 	},
 	{
 		listen = {
-			{port = 80},
+			{address = "127.0.0.1", port = 80},
 		},
 		server_name = {"example.net", "*.example.com", "~my%d+web%.org"},
 		root = "/srv/foobar",

@@ -27,7 +27,7 @@ local s_colon = #colon
 local chunked = "transfer-encoding: chunked\r\n"
 local s_chunked = #chunked
 
-local function send_rsp_headers(rsp)
+local function write_header_filter(rsp)
 	local req = rsp.req
 
 	local status = constants.status_tbl[rsp.status]
@@ -93,7 +93,7 @@ local function flush_body(rsp)
 	return true
 end
 
-local function send_rsp_body(rsp, data)
+local function write_body_filter(rsp, data)
 	local typ = type(data)
 	if typ == "string" then
 		if #data > 0 then
@@ -143,6 +143,6 @@ local function send_rsp_body(rsp, data)
 end
 
 return {
-	send_rsp_headers = send_rsp_headers,
-	send_rsp_body = send_rsp_body,
+	write_header_filter = write_header_filter,
+	write_body_filter = write_body_filter,
 }

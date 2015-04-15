@@ -897,9 +897,9 @@ end
 local function finalize_conn(sock, status, body)
 	local body = body or special_rsp[status]
 	sock:send(status_tbl[status],
-		"server: luajit.io\r\ncontent-type: text/plain\r\n",
+		"server: luajit.io\r\ncontent-type: text/html\r\n",
 		"content-length: " .. #body .. "\r\n",
-		"date: " .. http_time() .. "\r\nconnection: keep-alive\r\n\r\n",
+		"date: " .. http_time() .. "\r\nconnection: close\r\n\r\n",
 		body)
 end
 
@@ -916,7 +916,6 @@ local function http_handler(sock)
 
 	local rsp = http_rsp_new(req, sock)
 
-	--finalize_conn(req.sock, 200, "hello world!\n")
 	sock.read_quota = sock.stats.consume + (req.headers["content-length"] or 0)
 	handle_http_request(req, rsp)
 	sock.read_quota = nil

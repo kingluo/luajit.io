@@ -5,8 +5,8 @@ local gzip = require("ljio.http.filter.gzip_filter")
 local first_header_filter = gzip.header_filter
 local first_body_filter = gzip.body_filter
 
-gzip.next_header_filter = require("ljio.http.send_rsp").send_rsp_headers
-gzip.next_body_filter = require("ljio.http.send_rsp").send_rsp_body
+gzip.next_header_filter = require("ljio.http.filter.write_filter").write_header_filter
+gzip.next_body_filter = require("ljio.http.filter.write_filter").write_body_filter
 
 return {
 	run_next_header_filter = function(rsp)

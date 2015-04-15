@@ -85,9 +85,10 @@ local function tcp_parse_conf(cfg)
 			if not srv_tbl[port][address] then
 				srv_tbl[port][address] = {}
 				srv_tbl[port][address].linfo = linfo
-				if linfo.default_server then
-					srv_tbl[port][address].default_server = srv
-				end
+			end
+
+			if linfo.default_server then
+				srv_tbl[port][address].default_server = srv
 			end
 
 			tinsert(srv_tbl[port][address], srv)
