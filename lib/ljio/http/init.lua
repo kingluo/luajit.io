@@ -226,7 +226,7 @@ end
 
 local function read_header(sock, ctx)
     local headers, method, url, version
-    --sock:settimeout((g_http_cfg.client_header_timeout or 60) * 1000)
+    -- sock:settimeout((g_http_cfg.client_header_timeout or 60) * 1000)
 
     local quota = g_http_cfg.large_client_header_buffers[2]
     sock.read_quota = sock.stats.consume + g_http_cfg.large_client_header_buffers[1] * quota

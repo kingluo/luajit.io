@@ -280,28 +280,31 @@ local function receive_ll(self, pattern, extra)
     --end
 end
 
+local function read_timeout_handler(args)
+    local self = args[1]
+    self.rtimedout = true
+    if self[YIELD_R] then
+        coroutine.resume(self[YIELD_R])
+    end
+end
+
 function tcp_mt.__index.receive(self, pattern, extra)
     if self.closed then return nil, "closed" end
 
     if self.reading then return nil,"socket busy reading" end
     self.reading = true
 
-    --self.rtimedout = false
-    --if self.timeout and self.timeout > 0 then
-    --    self.rtimer = timer.add_timer(function()
-    --        self.rtimedout = true
-    --        if self[YIELD_R] then
-    --            coroutine.resume(self[YIELD_R])
-    --        end
-    --    end, self.timeout)
-    --end
+    self.rtimedout = false
+    if self.timeout and self.timeout > 0 then
+       self.rtimer = timer.add_timer(read_timeout_handler, self.timeout)
+    end
 
     local r,err,partial = receive_ll(self, pattern, extra)
 
-    --if self.rtimer then
-    --    self.rtimer:cancel()
-    --    self.rtimer = nil
-    --end
+    if self.rtimer then
+       self.rtimer:cancel()
+       self.rtimer = nil
+    end
 
     self.reading = false
     return r,err,partial
@@ -486,25 +489,28 @@ local function send_ll(self, ...)
     end
 end
 
+local function write_timeout_handler(args)
+    local self = args[1]
+    self.wtimedout = true
+    if self[YIELD_W] then
+        coroutine.resume(self[YIELD_W])
+    end
+end
+
 function tcp_mt.__index.send(self, ...)
     if self.closed then return nil, 'fd closed' end
 
-    --self.wtimedout = false
-    --if self.timeout and self.timeout > 0 then
-    --    self.wtimer = timer.add_timer(function()
-    --        self.wtimedout = true
-    --        if self[YIELD_W] then
-    --            coroutine.resume(self[YIELD_W])
-    --        end
-    --    end, self.timeout)
-    --end
+    self.wtimedout = false
+    if self.timeout and self.timeout > 0 then
+       self.wtimer = timer.add_timer(write_timeout_handler, self.timeout, self)
+    end
 
     local sent,err = send_ll(self, ...)
 
-    --if self.wtimer then
-    --    self.wtimer:cancel()
-    --    self.wtimer = nil
-    --end
+    if self.wtimer then
+       self.wtimer:cancel()
+       self.wtimer = nil
+    end
 
     return sent,err
 end

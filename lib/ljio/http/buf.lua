@@ -48,7 +48,7 @@ local function copy_value(tbl, ...)
         local v = ...
         copy_values_ll(tbl, v)
         if n > 1 then
-            return copy_value(select(2, ...))
+            return copy_value(tbl, select(2, ...))
         end
     end
 end

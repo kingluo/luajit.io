@@ -18,6 +18,11 @@ require("ljio.http") {
     worker_processes = 1,
     worker_connections = 512,
 
+    lua_shared_dict = {
+        test = "10m",
+        my_locks = "100k",
+    },
+
     gzip = true,
     gzip_comp_level = 1,
     gzip_min_length = 20,

@@ -77,7 +77,7 @@ end
 
 local function lru_recycle(dict)
     pthread.pthread_rwlock_wrlock(dict.dict.lock)
-    local kv =     dict.dict.qtail
+    local kv = dict.dict.qtail
     local count = 0
     while kv ~= nil and count < 10 do
         delete_ll(dict, kv)
@@ -162,7 +162,7 @@ local function expire_handler()
     rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, now)
     for name,dict in pairs(M.shared) do
         pthread.pthread_rwlock_wrlock(dict.dict.lock)
-        local kv =     dict.dict.qtail
+        local kv = dict.dict.qtail
         local count = 0
         while kv ~= nil and count < 20 do
             if kv.expire.tv_sec > 0 then
@@ -206,7 +206,7 @@ end
 
 local function find_key(dict, key)
     local ksize = #key
-    local bucket =     dict.buckets[key2bucket(dict, key)]
+    local bucket = dict.buckets[key2bucket(dict, key)]
     while bucket ~= nil do
         if ksize == bucket.ksize and C.memcmp(bucket.key, key, ksize) == 0 then
             return bucket
@@ -266,7 +266,7 @@ local function rehash(self, safe)
     C.memset(dict.buckets, 0, newbsize * ffi.sizeof("shdict_kv_t*"))
     dict.bsize = newbsize
 
-    local kv =     dict.qtail
+    local kv = dict.qtail
     while kv ~= nil do
         local idx = key2bucket(dict, kv.key, kv.ksize)
         local bucket = dict.buckets[idx]
@@ -410,7 +410,7 @@ function _M.flush_all(self)
     local dict = self.dict
     local pool = self.pool
     pthread.pthread_rwlock_wrlock(dict.lock)
-    local kv =     dict.qtail
+    local kv = dict.qtail
     while kv ~= nil do
         slab.free(pool, kv.key)
         slab.free(pool, kv.value)
@@ -473,7 +473,7 @@ function _M.get_keys(self, max_count)
     local t = {}
     local dict = self.dict
     pthread.pthread_rwlock_rdlock(dict.lock)
-    local kv =     dict.qhead
+    local kv = dict.qhead
     while kv ~= nil do
         tinsert(t, ffi.string(kv.key, kv.ksize))
         if max_count then

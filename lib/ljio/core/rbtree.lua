@@ -50,23 +50,25 @@ local function rbtree_right_rotate(tree, sentinel, node)
 end
 
 local function insert_value(tree, temp, node, sentinel)
-    while true do
+    -- while true do
         if tree.compare_fn(node, temp) then
             if temp.left == sentinel then
                 temp.left = node
-                break
+                -- break
             else
-                temp = temp.left
+                -- temp = temp.left
+                return insert_value(tree, temp.left, node, sentinel)
             end
         else
             if temp.right == sentinel then
                 temp.right = node
-                break
+                -- break
             else
-                temp = temp.right
+                -- temp = temp.right
+                return insert_value(tree, temp.right, node, sentinel)
             end
         end
-    end
+    -- end
 
     node.parent = temp
     node.left = sentinel
@@ -79,12 +81,10 @@ local function builtin_compare(a,b)
 end
 
 local function rbtree_new(compare_fn)
+    local sentinel = {color = BLACK}
     local tree = {}
-    tree.color = BLACK
-    tree.left = tree
-    tree.right = tree
-    tree.root = tree
-    tree.sentinel = tree
+    tree.root = sentinel
+    tree.sentinel = sentinel
     tree.compare_fn = compare_fn or builtin_compare
     tree.n_node = 0
     return setmetatable(tree, rbtree_mt)
@@ -117,10 +117,10 @@ end
 
 function rbtree_mt.__index.insert(tree, node)
     tree.n_node = tree.n_node + 1
-    local root = tree.root
+    -- print("insert, tree=",tree,"root=", tree.root, "node=",node)
     local sentinel = tree.sentinel
 
-    if (root == sentinel) then
+    if tree.root == sentinel then
         node.parent = nil
         node.left = sentinel
         node.right = sentinel
@@ -129,9 +129,9 @@ function rbtree_mt.__index.insert(tree, node)
         return
     end
 
-    insert_value(tree, root, node, sentinel)
+    insert_value(tree, tree.root, node, sentinel)
 
-    while (node ~= root and node.parent.color == RED) do
+    while (node ~= tree.root and node.parent.color == RED) do
         if (node.parent == node.parent.parent.left) then
             local temp = node.parent.parent.right
 
@@ -171,11 +171,12 @@ function rbtree_mt.__index.insert(tree, node)
         end
     end
 
-    root.color = BLACK
+    tree.root.color = BLACK
 end
 
 function rbtree_mt.__index.delete(tree, node)
-    if node.left == nil and node.right == nil then
+    -- print("delete tree=", tree,"root=", tree.root,"node=", node)
+    if node == nil or (node.left == nil and node.right == nil) then
         return
     end
 
@@ -289,6 +290,7 @@ function rbtree_mt.__index.delete(tree, node)
                 temp = tree.root
             end
         else
+        assert (temp == temp.parent.right)
             local w = temp.parent.left
 
             if w.color == RED then
@@ -320,6 +322,24 @@ function rbtree_mt.__index.delete(tree, node)
 
     temp.color = BLACK
 end
+
+-- local function compare(a, b)
+    -- return a.val < b.val
+-- end
+
+-- local tree = rbtree_new(compare)
+-- local n1 = {val=1}
+-- local n2 = {val=99}
+-- local n3 = {val=23}
+-- tree:insert(n1)
+-- tree:insert(n2)
+-- tree:insert(n3)
+
+-- tree:delete(tree:find({val=99}))
+-- print(n1,n2,n3, n1.left,n1.right)
+-- tree:delete(n1)
+-- tree:delete(tree:find({val=23}))
+-- print(tree:size())
 
 return {
     new = rbtree_new,

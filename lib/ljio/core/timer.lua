@@ -38,7 +38,7 @@ local function timerfd_settime(fd, sec, nsec)
     assert(C.timerfd_settime(fd, 0, timespec, nil) == 0)
 end
 
-local function add_timer(fn, sec)
+local function add_timer(fn, sec, ...)
     assert(sec > 0)
     local nsec = (sec%1) * 1000 * 1000 * 1000
     sec = math.floor(sec)
@@ -47,7 +47,8 @@ local function add_timer(fn, sec)
     local timer = setmetatable({
         tv_sec = tv.tv_sec + sec,
         tv_nsec = tv.tv_nsec + nsec,
-        fn = fn
+        fn = fn,
+        ...
     }, timer_mt)
 
     g_timer_rbtree:insert(timer)
@@ -69,7 +70,7 @@ local function process_all_timers()
     while g_timer_rbtree:size() > 0 do
         local t = g_timer_rbtree:min()
         if not timer_lt(t, tv) then break end
-        t.fn()
+        t.fn(t)
         g_timer_rbtree:delete(t)
         n_process = n_process + 1
     end
