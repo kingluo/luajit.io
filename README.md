@@ -41,8 +41,13 @@ It contains a simple socks5 server, as the generic tcp server demo.
 LD_PRELOAD=/lib/x86_64-linux-gnu/libpthread.so.0 luajit conf/socks5.lua
 ```
 
-Note that normally the luajit is not compiled with -lpthread, which would cause multi-threading app crash, and the async DNS resolving uses multi-threading, so either re-compile the luajit or use LD_PRELOAD.
-And you should locate the correct version of libpthread.so on your box.
+Note that by default, the luajit is not compiled with `-lpthread`, which would cause multi-threading usage crash.
+
+See https://sourceware.org/bugzilla/show_bug.cgi?id=10652 for detail.
+
+The async DNS resolving uses multi-threading, so either re-compile the luajit or use LD_PRELOAD before running it.
+
+You should locate the correct version of libpthread.so on your box.
 
 ``` shell
 locate libpthread.so
