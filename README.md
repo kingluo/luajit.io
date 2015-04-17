@@ -20,6 +20,8 @@ Welcome to join and help!
 
 ## QuickStart
 
+### http server
+
 Just like the API compatibility, the luajit.io configuration simulates the nginx.conf, so most directives are copied from there.
 See conf/httpd.lua for example.
 
@@ -29,4 +31,19 @@ Then just run it:
 
 ``` shell
 luajit conf/myhttpd.lua
+```
+
+### generic tcp server
+
+It contains a simple socks5 server, as the generic tcp server demo.
+
+``` shell
+LD_PRELOAD=/lib/x86_64-linux-gnu/libpthread.so.0 luajit conf/socks5.lua
+```
+
+Note that normally the luajit is not compiled with -lpthread, which would cause multi-threading app crash, and the async DNS resolving uses multi-threading, so either re-compile the luajit or use LD_PRELOAD.
+And you should locate the correct version of libpthread.so on your box.
+
+``` shell
+locate libpthread.so
 ```
