@@ -86,8 +86,9 @@ local function run(expect_events)
             for ev_idx = 0, n-1 do
                 local fd = ev_set[ev_idx].data.fd
                 n_events = n_events + 1
-                assert(handlers[fd])
-                handlers[fd].handler(handlers[fd], ev_set[ev_idx].events)
+                if handlers[fd] then
+                    handlers[fd].handler(handlers[fd], ev_set[ev_idx].events)
+                end
             end
         end
 

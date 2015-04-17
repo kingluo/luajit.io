@@ -6,6 +6,12 @@ local tcp = require("ljio.socket.tcp")
 local dns = require("ljio.socket.dns")
 
 local addr_in = ffi.new("struct sockaddr_in")
+local in_addr_t_sz = ffi.sizeof("in_addr_t")
+local in_port_t_sz = ffi.sizeof("in_port_t")
+local tmp1 = ffi.new("in_addr_t[1]")
+local tmp2 = ffi.new("in_port_t[1]")
+local tmp3 = ffi.new("char[?]", in_addr_t_sz)
+local tmp4 = ffi.new("socklen_t[1]")
 
 local function read_data(rbuf, avaliable)
     local data = ffi.string(rbuf.cp2, avaliable)
@@ -64,12 +70,19 @@ local function server(sock)
         return
     end
 
-    local reply = '\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00'
-    -- local reply = '\x05\x00\x00\x01'
-    -- C.getsockname(remote.fd, ffi.cast("struct sockaddr *", addr_in), nil)
-    -- addr = addr_in.sin_addr.s_addr
-    -- reply = reply .. addr .. addr_in.sin_port
-    sock:send(reply)
+    local reply = '\x05\x00\x00\x01'
+    C.getsockname(remote.fd, ffi.cast("struct sockaddr *", addr_in), tmp4)
+    tmp1[0] = addr_in.sin_addr.s_addr
+    ffi.copy(tmp3, tmp1, in_addr_t_sz)
+    reply = reply .. ffi.string(tmp3, in_addr_t_sz)
+    tmp2[0] = addr_in.sin_port
+    ffi.copy(tmp3, tmp2, in_port_t_sz)
+    reply = reply .. ffi.string(tmp3, in_port_t_sz)
+
+    local sent, err = sock:send(reply)
+    if err then
+        return
+    end
 
     local co1 = coroutine.create(transfer_data)
     coroutine.resume(co1, sock, remote)
@@ -77,7 +90,6 @@ local function server(sock)
     coroutine.resume(co2, remote, sock)
     coroutine.wait(co1)
     coroutine.wait(co2)
-    remote:close()
 end
 
 return server
