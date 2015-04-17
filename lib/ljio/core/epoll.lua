@@ -3,6 +3,7 @@
 local ffi = require("ffi")
 local C = require("ljio.cdef")
 local bit = require("bit")
+local utils = require("ljio.core.utils")
 
 local g_epoll_fd
 local g_prepare_hooks

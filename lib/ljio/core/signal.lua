@@ -21,7 +21,7 @@ local function add_signal_handler(signo, handler)
     end
     if #handlers[signo] == 0 then
         C.sigaddset(g_mask, signo)
-        assert(C.sigprocmask(SIG_BLOCK, g_mask, nil) == 0)
+        assert(C.sigprocmask(SIG_SETMASK, g_mask, nil) == 0)
         assert(C.signalfd(g_signalfd, g_mask, 0) > 0)
     end
     table.insert(handlers[signo], handler)

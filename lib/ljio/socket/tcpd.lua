@@ -134,10 +134,14 @@ local function tcp_handler(sock)
     local srv = srv_list[1]
     local handler = srv.handler
     if type(handler) == 'string' then
-        return require(handler).service(srv)
-    elseif type(handler) == 'function' then
-        return handler(srv)
+        local ret
+        ret, handler = pcall(require, handler)
+        if ret == false then
+            print(handler)
+            return
+        end
     end
+    return handler(sock, srv)
 end
 
 local function do_all_listen_sk(func)

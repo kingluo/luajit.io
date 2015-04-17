@@ -1,13 +1,15 @@
 -- Copyright (C) Jinhua Luo
 
 local ffi = require("ffi")
+local anl = ffi.load("anl")
 local C = require("ljio.cdef")
-require("ljio.core.coroutine")
 local signal = require("ljio.core.signal")
 
 local requests = {}
 local handler_registered = false
-local anl = ffi.load("anl")
+local tmp = ffi.new("struct gaicb*[1]")
+local sig = ffi.new("struct sigevent")
+local next_req_key = 1
 
 local function handle_answer(siginfo)
     assert(siginfo.ssi_code == C.SI_ASYNCNL)
@@ -19,7 +21,7 @@ local function handle_answer(siginfo)
     local ip, port
     while runp ~= nil do
         local addr = ffi.cast("struct sockaddr_in *", runp.ai_addr)
-        local val = ffi.cast("unsigned short",C.ntohs(addr[0].sin_port))
+        local val = ffi.cast("unsigned short", C.ntohs(addr[0].sin_port))
         port = tonumber(val)
         ip = ffi.string(C.inet_ntoa(addr[0].sin_addr))
         if ip ~= "0.0.0.0" then
@@ -29,13 +31,10 @@ local function handle_answer(siginfo)
     end
     anl.freeaddrinfo(gaicb.ar_result)
     requests[key] = nil
-    if req.handler then return handler(ip, port) end
+    if req.handler then return req.handler(ip, port) end
     return coroutine.resume(req.co, ip, port)
 end
 
-local tmp = ffi.new("struct gaicb*[1]")
-local sig = ffi.new("struct sigevent")
-local next_req_key = 1
 local function resolve(host, port, handler)
     if handler_registered == false then
         handler_registered = true

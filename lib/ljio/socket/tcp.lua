@@ -112,11 +112,15 @@ local function tcp_new(fd)
     return sock
 end
 
+local function return_yield(self, rw, ...)
+    self[rw] = nil
+    return ...
+end
+
 function tcp_mt.__index.yield(self, rw)
     if self[rw] then return "sock waiting" end
     self[rw] = coroutine.running()
-    coroutine.yield()
-    self[rw] = nil
+    return return_yield(self, rw, coroutine.yield())
 end
 
 function tcp_mt.__index.yield_r(self)
@@ -775,6 +779,7 @@ function tcp_mt.__index.connect(self, host, port, options_table)
         self.resolve_key = dns.resolve(host, port, function(ip, port)
             coroutine.resume(self[YIELD_W], ip, port)
         end)
+
         host, port = self:yield(YIELD_W)
         local err
         if self.wtimedout then
