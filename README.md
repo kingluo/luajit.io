@@ -10,6 +10,23 @@ The Luajit is a perfect JIT engine to improve lua performance, so with dedicated
 
 **See the http://luajit.io for demo.**
 
+## Supported Platforms
+
+**Only supports Linux on x86 or x64.**
+
+The luajit.io uses linux-specific features, e.g. epoll, signalfd, timerfd, inotify, etc.
+
+## Dependencies
+
+* openssl
+* zlib
+
+On Debian Linux, you should install the dev packages of them, which contains the required *.so links:
+
+``` shell
+apt-get install zlib1g-dev libssl-dev
+```
+
 ## Status
 
 This library is considered experimental and still under active development.
