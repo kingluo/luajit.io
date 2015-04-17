@@ -1,0 +1,83 @@
+-- Copyright (C) Jinhua Luo
+
+local ffi = require("ffi")
+local C = require("ljio.cdef")
+local tcp = require("ljio.socket.tcp")
+local dns = require("ljio.socket.dns")
+
+local addr_in = ffi.new("struct sockaddr_in")
+
+local function read_data(rbuf, avaliable)
+    local data = ffi.string(rbuf.cp2, avaliable)
+    rbuf.cp2 = rbuf.cp2 + avaliable
+    return data
+end
+
+local function transfer_data(sock1, sock2)
+    local data, err = sock1:receive(read_data)
+    if err then
+        return
+    end
+
+    local sent, err = sock2:send(data)
+    if err then
+        return
+    end
+    return transfer_data(sock1, sock2)
+end
+
+local function server(sock)
+	local data = sock:receive(2)
+	local nmethods = string.byte(data:sub(2, 2))
+	sock:receive(nmethods)
+	sock:send("\x05\x00")
+
+	local data, err = sock:receive(4)
+    if err then
+        return
+    end
+	local cmd = string.byte(data:sub(2, 2))
+    if cmd ~= 1 then
+        sock:send('\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00')
+        return
+    end
+
+	local atyp = string.byte(data:sub(4, 4))
+    local addr
+    if atyp == 1 then
+        addr = sock:receive(4)
+        addr = ffi.string(C.inet_ntoa(addr))
+    elseif atyp == 3 then
+        local len = sock:receive(1)
+        len = string.byte(len)
+        addr = sock:receive(len)
+    end
+
+    local port = sock:receive(2)
+    port = string.byte(port:sub(1, 1)) * 256 + string.byte(port:sub(2, 2))
+
+    local remote, err = tcp.new()
+    local ret, err = remote:connect(addr, port)
+    if err then
+        print("connect: addr=" .. addr .. ", port=" .. port .. ", err=" .. err)
+        sock:send('\x05\x05\x00\x01\x00\x00\x00\x00\x00\x00')
+        return
+    end
+
+    local reply = '\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00'
+    -- local reply = '\x05\x00\x00\x01'
+    -- C.getsockname(remote.fd, ffi.cast("struct sockaddr *", addr_in), nil)
+    -- addr = addr_in.sin_addr.s_addr
+    -- reply = reply .. addr .. addr_in.sin_port
+    sock:send(reply)
+
+    local co1 = coroutine.create(transfer_data)
+    coroutine.resume(co1, sock, remote)
+    local co2 = coroutine.create(transfer_data)
+    coroutine.resume(co2, remote, sock)
+    coroutine.wait(co1)
+    coroutine.wait(co2)
+    remote:close()
+end
+
+return server
