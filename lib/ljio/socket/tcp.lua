@@ -300,7 +300,7 @@ function tcp_mt.__index.receive(self, pattern, extra)
 
     self.rtimedout = false
     if self.timeout and self.timeout > 0 then
-       self.rtimer = timer.add_timer(read_timeout_handler, self.timeout)
+       self.rtimer = timer.add_timer(read_timeout_handler, self.timeout, self)
     end
 
     local r,err,partial = receive_ll(self, pattern, extra)

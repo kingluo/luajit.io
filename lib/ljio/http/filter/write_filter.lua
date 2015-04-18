@@ -66,6 +66,9 @@ local function write_header_filter(rsp)
 
     for _, field in ipairs(rsp.headers) do
         local val = rsp.headers[field]
+        if type(val) ~= "string" then
+            val = tostring(val)
+        end
         if val then
             tinsert(buf, field)
             tinsert(buf, colon)
@@ -132,8 +135,10 @@ local function write_body_filter(rsp, data)
         if err then return ret,err end
     elseif data == constants.flush or data == constants.eof then
         if data == constants.eof then
-            tinsert(rsp.buf, eof)
-            rsp.buf.size = rsp.buf.size + #eof
+            if rsp.chunked then
+                tinsert(rsp.buf, eof)
+                rsp.buf.size = rsp.buf.size + #eof
+            end
             rsp.eof = true
         end
 

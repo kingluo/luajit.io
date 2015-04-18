@@ -50,6 +50,8 @@ int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optl
 int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen);
 int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 
+ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags, struct sockaddr *src_addr, socklen_t *addrlen);
+
 struct addrinfo
 {
   int ai_flags;
@@ -141,6 +143,7 @@ static const int GAI_NOWAIT = 1;
 static const int AF_UNIX = 1;
 static const int AF_INET = 2;
 static const int SOCKET_STREAM = 1;
+static const int SOCK_DGRAM = 2;
 static const int SOL_SOCKET = 1;
 static const int SO_REUSEADDR = 2;
 static const int SO_ERROR = 4;
