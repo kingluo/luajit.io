@@ -33,22 +33,22 @@ local function transfer_data(sock1, sock2)
 end
 
 local function server(sock)
-	local data = sock:receive(2)
-	local nmethods = string.byte(data:sub(2, 2))
-	sock:receive(nmethods)
-	sock:send("\x05\x00")
+    local data = sock:receive(2)
+    local nmethods = string.byte(data:sub(2, 2))
+    sock:receive(nmethods)
+    sock:send("\x05\x00")
 
-	local data, err = sock:receive(4)
+    local data, err = sock:receive(4)
     if err then
         return
     end
-	local cmd = string.byte(data:sub(2, 2))
+    local cmd = string.byte(data:sub(2, 2))
     if cmd ~= 1 then
         sock:send('\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00')
         return
     end
 
-	local atyp = string.byte(data:sub(4, 4))
+    local atyp = string.byte(data:sub(4, 4))
     local addr
     if atyp == 1 then
         addr = sock:receive(4)
