@@ -5,6 +5,7 @@ local C = require("ljio.cdef")
 local tcp = require("ljio.socket.tcp")
 local dns = require("ljio.socket.dns")
 
+local in_addr = ffi.new("struct in_addr")
 local addr_in = ffi.new("struct sockaddr_in")
 local in_addr_t_sz = ffi.sizeof("in_addr_t")
 local in_port_t_sz = ffi.sizeof("in_port_t")
@@ -33,26 +34,28 @@ local function transfer_data(sock1, sock2)
 end
 
 local function server(sock)
-	local data = sock:receive(2)
-	local nmethods = string.byte(data:sub(2, 2))
-	sock:receive(nmethods)
-	sock:send("\x05\x00")
+    local data = sock:receive(2)
+    local nmethods = string.byte(data:sub(2, 2))
+    sock:receive(nmethods)
+    sock:send("\x05\x00")
 
-	local data, err = sock:receive(4)
+    local data, err = sock:receive(4)
     if err then
         return
     end
-	local cmd = string.byte(data:sub(2, 2))
+    local cmd = string.byte(data:sub(2, 2))
     if cmd ~= 1 then
         sock:send('\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00')
         return
     end
 
-	local atyp = string.byte(data:sub(4, 4))
+    local atyp = string.byte(data:sub(4, 4))
     local addr
     if atyp == 1 then
         addr = sock:receive(4)
-        addr = ffi.string(C.inet_ntoa(addr))
+        tmp1 = ffi.cast("in_addr_t*", addr)
+        in_addr.s_addr = tmp1
+        addr = ffi.string(C.inet_ntoa(in_addr))
     elseif atyp == 3 then
         local len = sock:receive(1)
         len = string.byte(len)
