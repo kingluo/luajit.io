@@ -40,13 +40,13 @@ converters[701] = tonumber
 converters[1700] = tonumber
 
 local function bool2lua(val)
-	if not val then
-		return false
-	elseif val == 't' then
-		return true
-	else
-		return false
-	end
+    if not val then
+        return false
+    elseif val == 't' then
+        return true
+    else
+        return false
+    end
 end
 -- BOOLOID
 converters[16] = bool2lua
@@ -357,8 +357,8 @@ function read_result(self)
     local fields = {}
     local field_ok = false
     local packet, typ, err
-	local err_msg
-	local tstatus
+    local err_msg
+    local tstatus
     while true do
         packet, typ, err = _recv_packet(self)
         if not packet then
@@ -415,19 +415,19 @@ function read_result(self)
             local msg = _parse_error_packet(packet)
             err = msg.M
             res = nil
-			err_msg = msg
+            err_msg = msg
         end
         if typ == 'C' then
             -- read complete
             local sql_type = _from_cstring(packet, 1)
             self.env.sql_type = sql_type
             err = nil
-			fields = {}
-			field_ok = false
+            fields = {}
+            field_ok = false
         end
         if typ == 'Z' then
             self.state = STATE_CONNECTED
-			tstatus = packet:sub(1,1)
+            tstatus = packet:sub(1,1)
             break
         end
     end    
