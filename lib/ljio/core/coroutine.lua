@@ -88,7 +88,7 @@ local function co_resume_ll(co, ret, ...)
     if ret == false then
         local err = ...
         if err == "exit_group" then
-            local cur = coroutine.running()
+            local cur = coroutine_running()
             if cur == nil or co_info[cur].parent == nil then
                 local ancestor = cur or co_info[co].ancestor or co
                 handle_dead_co(co, ret, ...)
@@ -246,7 +246,7 @@ end
 
 local epoll_wait_hook2_registered = false
 local function wait_descendants()
-    local co = coroutine.running()
+    local co = coroutine_running()
     assert(co)
     local cinfo = co_info[co]
     assert(cinfo)
