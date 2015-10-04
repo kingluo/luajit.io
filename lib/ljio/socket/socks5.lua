@@ -3,7 +3,6 @@
 local ffi = require("ffi")
 local C = require("ljio.cdef")
 local tcp = require("ljio.socket.tcp")
-local dns = require("ljio.socket.dns")
 
 local in_addr = ffi.new("struct in_addr")
 local addr_in = ffi.new("struct sockaddr_in")
@@ -34,7 +33,10 @@ local function transfer_data(sock1, sock2)
 end
 
 local function server(sock)
-    local data = sock:receive(2)
+    local data, err = sock:receive(2)
+	if err then
+		return
+	end
     local nmethods = string.byte(data:sub(2, 2))
     sock:receive(nmethods)
     sock:send("\x05\x00")
@@ -54,7 +56,7 @@ local function server(sock)
     if atyp == 1 then
         addr = sock:receive(4)
         tmp1 = ffi.cast("in_addr_t*", addr)
-        in_addr.s_addr = tmp1
+        in_addr.s_addr = tmp1[0]
         addr = ffi.string(C.inet_ntoa(in_addr))
     elseif atyp == 3 then
         local len = sock:receive(1)
