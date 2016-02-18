@@ -34,7 +34,7 @@ local function luax_compile(str)
                 tinsert(codes, format("%s or ''", strsub(str,m+3,n-1)))
                 tinsert(codes, ");")
             else
-                tinsert(codes, format("%s;", strsub(str,m+2,n-1)))
+                tinsert(codes, format("%s\n", strsub(str,m+2,n-1)))
             end
         else
             if i < #str then
