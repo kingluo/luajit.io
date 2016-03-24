@@ -64,10 +64,8 @@ local function run(expect_events)
     local n_events = 0
     while true do
         local wait_timeout = -1
-        local to_exit = false
-        for _,hook in ipairs(g_prepare_hooks) do
-            local t
-            t,to_exit = hook()
+        for i = 1, #g_prepare_hooks do
+            local t,to_exit = g_prepare_hooks[i]()
             if to_exit == true then return n_events end
             if t and t >= 0 then
                 if wait_timeout == -1 or t < wait_timeout then
