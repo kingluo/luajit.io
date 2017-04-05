@@ -438,7 +438,7 @@ function http_rsp_mt.__index.exit(self, status)
     return coroutine.exit(true)
 end
 
-function http_rsp_mt.__index.encode_args(self, args)
+local function encode_args(args)
     local t = {}
     for k,v in pairs(args) do
         k = escape(k)
@@ -457,6 +457,10 @@ function http_rsp_mt.__index.encode_args(self, args)
         end
     end
     return tconcat(t, "&")
+end
+
+function http_rsp_mt.__index.encode_args(self, args)
+    return encode_args(args)
 end
 
 function http_rsp_mt.__index.exec(self, uri, args)
@@ -747,6 +751,83 @@ local function find_first_less_equal(t, elem)
     end
 end
 
+-- ngx api wrappers
+
+local tcp = require("ljio.socket.tcp")
+local logging = require("ljio.core.logging")
+
+local function get_socket()
+    return ngx._req.sock
+end
+
+local function get_headers()
+    return ngx._req.headers
+end
+
+local function get_method()
+    return ngx._req.method
+end
+
+local function ngx_tcp()
+    return tcp.new()
+end
+
+local function ngx_log(...)
+    return logging.log(...)
+end
+
+local function ngx_print(...)
+    return ngx._rsp:print(...)
+end
+
+local function ngx_say(...)
+    return ngx._rsp:say(...)
+end
+
+local ngx_mt = {
+    __index = {
+        req = {socket = get_socket, get_headers = get_headers, get_method = get_method},
+        socket = {tcp = ngx_tcp},
+        encode_args = encode_args,
+        log = ngx_log,
+        DEBUG = "debug",
+        ERR = "err",
+        print = ngx_print,
+        say = ngx_say,
+        config = {ngx_lua_version = "luajit", debug = false},
+        null = ffi.new("void*"),
+        shared = require("ljio.core.shdict"),
+        sleep = coroutine.sleep,
+        udp = require"ljio.socket.udp",
+        md5 = require"ljio.core.md5",
+    },
+    __newindex = function(t, n, v)
+        if n == "status" then
+            ngx._rsp.status = v
+        end
+        rawset(t, n, v)
+    end,
+}
+
+local function is_args()
+    return ngx._req.url.query and "?" or ""
+end
+
+local function setup_api(req, rsp)
+    if ngx == nil then
+        ngx = setmetatable({var = {is_args = is_args}}, ngx_mt)
+    end
+    ngx._req = req
+    ngx._rsp = rsp
+    ngx.header = rsp.headers
+    ngx.var.scheme = req.sock.use_ssl and "https" or "http"
+    ngx.var.uri = req.url.path
+    ngx.var.query_string = req.url.query
+    ngx.var.content_type = req.headers["content-type"]
+end
+
+--#--
+
 local function handle_http_request(req, rsp)
     local match_srv
     local srv_list = g_http_cfg.srv_tbl[req.sock.srv_port][req.sock.srv_ip]
@@ -873,6 +954,8 @@ local function handle_http_request(req, rsp)
                 return rsp:finalize(500)
             end
         end
+
+        setup_api(req, rsp)
 
         local handler = coroutine.create(fn, nil)
         coroutine.resume(handler, req, rsp)
