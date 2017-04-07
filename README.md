@@ -10,6 +10,19 @@ The Luajit is a perfect JIT engine to improve lua performance, so with dedicated
 
 **See the http://luajit.io for demo.**
 
+## API compatible with ngx_lua (Work In Progress)
+
+It provides seamless ngx_lua API, so third-party openresty libraries could be used in luajit.io without porting.
+
+Tested libraries:
+
+* lua-resty-lock
+* lua-resty-upload
+* lua-resty-http
+* lua-resty-dns
+* lua-resty-redis
+* lua-resty-postgres
+
 ## Supported Platforms
 
 **Only supports Linux on x86 or x64.**
