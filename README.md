@@ -33,11 +33,12 @@ The luajit.io uses linux-specific features, e.g. epoll, signalfd, timerfd, inoti
 
 * openssl
 * zlib
+* pcre
 
 On Debian Linux, you should install the dev packages of them, which contains the required *.so links:
 
 ``` shell
-apt-get install zlib1g-dev libssl-dev
+apt-get install zlib1g-dev libssl-dev libpcre3-dev
 ```
 
 ## Status
