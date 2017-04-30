@@ -3,6 +3,7 @@
 local C = require("ljio.cdef")
 local ffi = require("ffi")
 local tcpd = require("ljio.socket.tcpd")
+local pcre = require("ljio.core.pcre")
 
 local filter = require("ljio.http.filter")
 local run_next_header_filter = filter.run_next_header_filter
@@ -800,6 +801,12 @@ local ngx_mt = {
         sleep = coroutine.sleep,
         udp = require"ljio.socket.udp",
         md5 = require"ljio.core.md5",
+        re = {
+            match = pcre.match,
+            find = pcre.find,
+            sub = pcre.sub,
+            gsub = pcre.gsub,
+        },
     },
     __newindex = function(t, n, v)
         if n == "status" then
