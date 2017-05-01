@@ -2,6 +2,7 @@ local ffi = require("ffi")
 local C = ffi.C
 local bit = require("bit")
 local bor = bit.bor
+local lshift = bit.lshift
 local pcre = ffi.load("pcre")
 local strfmt = string.format
 local tinsert = table.insert
@@ -36,6 +37,9 @@ pcre *pcre_compile(const char *, int, const char **, int *,
 pcre_extra *pcre_study(const pcre *, int, const char **);
 int pcre_exec(const pcre *, const pcre_extra *, PCRE_SPTR,
               int, int, int, int *, int);
+int pcre_dfa_exec(const pcre *code, const pcre_extra *extra,
+    const char *subject, int length, int startoffset, int options,
+    int *ovector, int ovecsize, int *workspace, int wscount);
 void pcre_free_study(pcre_extra *);
 void (*pcre_free)(void *);
 int pcre_fullinfo(const pcre *code, const pcre_extra *extra, int what, void *where);
@@ -51,6 +55,7 @@ local capture_count = ffi.new("int[1]")
 local name_count = ffi.new("int[1]")
 local name_entry_size = ffi.new("int[1]")
 local name_table = ffi.new("const char *[1]")
+local ws = ffi.new("int[?]", 100)
 
 local all_options = {
     [("a"):byte()] = pcre.PCRE_ANCHORED,
@@ -66,6 +71,7 @@ local all_options = {
 
 local j_flag = ("j"):byte()
 local o_flag = ("o"):byte()
+local d_flag = ("d"):byte()
 
 local function match_ll(subject, subject_len, regex, options, ctx)
     -- parse options
@@ -85,6 +91,12 @@ local function match_ll(subject, subject_len, regex, options, ctx)
                 end
             end
         end
+    end
+
+    if flags[d_flag] then
+        -- pcre does not support JIT for DFA mode yet,
+        -- so if DFA mode is specified, we turn off JIT automatically
+        flags[j_flag] = nil
     end
 
     local cache_key = strfmt("%s:%08x", regex, opts)
@@ -117,12 +129,16 @@ local function match_ll(subject, subject_len, regex, options, ctx)
 
         name_idx = {}
         for i = 0, name_count[0] - 1 do
-            local n = ffi.string(name_table[0] + i * name_entry_size[0] + 2)
-            name_idx[n] = pcre.pcre_get_stringnumber(r, n)
+            local name_entry = name_table[0] + i * name_entry_size[0]
+            local name = ffi.string(name_entry + 2)
+            local idx = bor(lshift(name_entry[0], 8), name_entry[1])
+            tinsert(name_idx, {name, idx})
         end
+
         capture_count_val = capture_count[0]
         ovector_cnt = (capture_count[0] + 1) * 3
         ovector = ffi.new("int[?]", ovector_cnt)
+
         if once_flag then
             re_caches[cache_key] = {
                 r = r,
@@ -158,7 +174,18 @@ local function match_ll(subject, subject_len, regex, options, ctx)
         end
     end
 
-    local rc = pcre.pcre_exec(r, re, subject, subject_len, pos, exec_opts, ovector, ovector_cnt)
+    local rc
+
+    if flags[d_flag] then
+        ovector_cnt = 2
+        capture_count_val = 0
+        rc = pcre.pcre_dfa_exec(r, re, subject, subject_len, pos, exec_opts, ovector, ovector_cnt, ws, 100)
+        if rc == 0 then
+            rc = 1
+        end
+    else
+        rc = pcre.pcre_exec(r, re, subject, subject_len, pos, exec_opts, ovector, ovector_cnt)
+    end
 
     if rc > 0 and ctx then
         ctx.pos = ovector[1] + 1
@@ -190,7 +217,6 @@ local function match(subject, regex, options, ctx, res_table)
         if rc == pcre.PCRE_ERROR_NOMATCH then
             return nil
         else
-            -- TODO convert rc to error string
             return nil, rc
         end
     end
@@ -209,8 +235,24 @@ local function match(subject, regex, options, ctx, res_table)
         res_table[i] = false
     end
 
-    for k, v in pairs(name_idx) do
-        res_table[k] = res_table[v]
+    local do_dup = false
+    if options then
+        do_dup = options:find("D", 0, true)
+    end
+    for _, v in ipairs(name_idx) do
+        local name = v[1]
+        local idx = v[2]
+        local val = res_table[idx]
+        if val ~= nil then
+            if do_dup then
+                if res_table[name] == nil then
+                    res_table[name] = {}
+                end
+                tinsert(res_table[name], val)
+            else
+                res_table[name] = val
+            end
+        end
     end
 
     return res_table
