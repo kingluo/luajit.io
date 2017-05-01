@@ -21,6 +21,7 @@ Tested libraries:
 * lua-resty-http
 * lua-resty-dns
 * lua-resty-redis
+* lua-resty-mysql
 * lua-resty-postgres
 
 ## Supported Platforms
