@@ -757,6 +757,7 @@ end
 -- ngx api wrappers
 
 local tcp = require("ljio.socket.tcp")
+local udp = require("ljio.socket.udp")
 local logging = require("ljio.core.logging")
 
 local function get_socket()
@@ -790,17 +791,16 @@ end
 local ngx_mt = {
     __index = {
         req = {socket = get_socket, get_headers = get_headers, get_method = get_method},
-        socket = {tcp = ngx_tcp},
+        socket = {tcp = ngx_tcp, udp = udp},
         encode_args = encode_args,
         log = ngx_log,
         DEBUG = "debug",
         ERR = "err",
         print = ngx_print,
         say = ngx_say,
-        config = {ngx_lua_version = "luajit", debug = false},
+        config = {ngx_lua_version = 9011, debug = false},
         null = ffi.new("void*"),
         sleep = coroutine.sleep,
-        udp = require"ljio.socket.udp",
         md5 = require"ljio.core.md5",
         re = {
             match = pcre.match,

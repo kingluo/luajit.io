@@ -3,6 +3,7 @@
 
 require "ljio.core.sha"
 local ffi = require "ffi"
+local ssl = ffi.load("ssl")
 local ffi_new = ffi.new
 local ffi_str = ffi.string
 local C = ffi.C
@@ -38,7 +39,7 @@ local ctx_ptr_type = ffi.typeof("SHA_CTX[1]")
 
 function _M.new(self)
     local ctx = ffi_new(ctx_ptr_type)
-    if C.SHA1_Init(ctx) == 0 then
+    if ssl.SHA1_Init(ctx) == 0 then
         return nil
     end
 
@@ -47,12 +48,12 @@ end
 
 
 function _M.update(self, s)
-    return C.SHA1_Update(self._ctx, s, #s) == 1
+    return ssl.SHA1_Update(self._ctx, s, #s) == 1
 end
 
 
 function _M.final(self)
-    if C.SHA1_Final(buf, self._ctx) == 1 then
+    if ssl.SHA1_Final(buf, self._ctx) == 1 then
         return ffi_str(buf, digest_len)
     end
 
@@ -61,7 +62,7 @@ end
 
 
 function _M.reset(self)
-    return C.SHA1_Init(self._ctx) == 1
+    return ssl.SHA1_Init(self._ctx) == 1
 end
 
 
