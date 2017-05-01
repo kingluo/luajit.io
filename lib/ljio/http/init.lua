@@ -4,6 +4,8 @@ local C = require("ljio.cdef")
 local ffi = require("ffi")
 local tcpd = require("ljio.socket.tcpd")
 local pcre = require("ljio.core.pcre")
+local sha1 = require("ljio.core.sha1")
+local shdict = require("ljio.core.shdict")
 
 local filter = require("ljio.http.filter")
 local run_next_header_filter = filter.run_next_header_filter
@@ -797,7 +799,6 @@ local ngx_mt = {
         say = ngx_say,
         config = {ngx_lua_version = "luajit", debug = false},
         null = ffi.new("void*"),
-        shared = require("ljio.core.shdict"),
         sleep = coroutine.sleep,
         udp = require"ljio.socket.udp",
         md5 = require"ljio.core.md5",
@@ -807,6 +808,11 @@ local ngx_mt = {
             sub = pcre.sub,
             gsub = pcre.gsub,
         },
+        sha1_bin = function(str)
+            local ctx = sha1:new()
+            ctx:update(str)
+            return ctx:final()
+        end,
     },
     __newindex = function(t, n, v)
         if n == "status" then
@@ -831,6 +837,7 @@ local function setup_api(req, rsp)
     ngx.var.uri = req.url.path
     ngx.var.query_string = req.url.query
     ngx.var.content_type = req.headers["content-type"]
+    ngx.shared = shdict.shared
 end
 
 --#--
