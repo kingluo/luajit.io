@@ -202,8 +202,8 @@ local function receive_ll(self, pattern, extra)
                 local cp = rbuf.cp2
                 local r,err = pattern(self.rbuf, avaliable, extra)
                 self.stats.consume = self.stats.consume + (rbuf.cp2 - cp)
+                rbuf.cp1 = rbuf.cp2
                 if r or err then
-                    rbuf.cp1 = rbuf.cp2
                     return r,err
                 end
             elseif pattern == "*a" then
