@@ -43,7 +43,7 @@ local function add_timer(fn, sec, ...)
     local nsec = (sec%1) * 1000 * 1000 * 1000
     sec = math.floor(sec)
 
-    assert(rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, tv) == 0)
+    assert(rt.clock_gettime(C.CLOCK_MONOTONIC, tv) == 0)
     local timer = setmetatable({
         tv_sec = tv.tv_sec + sec,
         tv_nsec = tv.tv_nsec + nsec,
@@ -63,7 +63,7 @@ end
 local function process_all_timers()
     if g_timer_rbtree:size() == 0 then return 0 end
 
-    assert(rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, tv) == 0)
+    assert(rt.clock_gettime(C.CLOCK_MONOTONIC, tv) == 0)
 
     local n_process = 0
 
@@ -81,7 +81,7 @@ end
 local function get_next_interval()
     if g_timer_rbtree:size() == 0 then return nil end
     local t = g_timer_rbtree:min()
-    assert(rt.clock_gettime(C.CLOCK_MONOTONIC_RAW, tv) == 0)
+    assert(rt.clock_gettime(C.CLOCK_MONOTONIC, tv) == 0)
     assert(timer_lt(tv, t))
 
     local sec = t.tv_sec - tv.tv_sec

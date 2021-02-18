@@ -12,7 +12,7 @@ require("ljio.socket.tcpd") {
     log_import_print = false,
 
     user = "nobody",
-    group = "nogroup",
+    group = "nobody",
     working_directory = conf_prefix .. "../",
     daemon = false,
     worker_processes = 1,
