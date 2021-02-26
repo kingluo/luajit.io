@@ -52,6 +52,15 @@ Welcome to join and help!
 
 ## QuickStart
 
+### install luajit
+
+```
+wget https://luajit.org/download/LuaJIT-2.1.0-beta3.zip
+unzip LuaJIT-2.1.0-beta3.zip
+cd LuaJIT-2.1.0-beta3
+make install
+```
+
 ### http server
 
 Just like the API compatibility, the luajit.io configuration simulates the nginx.conf, so most directives are copied from there.
