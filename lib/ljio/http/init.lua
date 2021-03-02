@@ -826,9 +826,9 @@ local function is_args()
     return ngx._req.url.query and "?" or ""
 end
 
-local ngx
+ngx = {}
 local function setup_api(req, rsp)
-    if ngx == nil then
+    if ngx._req == nil then
         ngx = setmetatable({var = {is_args = is_args}}, ngx_mt)
     end
     ngx._req = req

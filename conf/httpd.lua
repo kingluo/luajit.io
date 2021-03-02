@@ -1,6 +1,6 @@
 local conf_prefix = string.match(arg[0], ".*/") or "./"
 package.path = package.path .. ";"
-    .. conf_prefix .. "../lib/?.lua;" .. conf_prefix .. "../lib/?/init.lua"
+    .. conf_prefix .. "../lib/?.lua;" .. conf_prefix .. "../lib/?/init.lua" .. ";../test"
 
 require("ljio.http") {
     -- toggle strict global env

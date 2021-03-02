@@ -73,6 +73,9 @@ local j_flag = ("j"):byte()
 local o_flag = ("o"):byte()
 local d_flag = ("d"):byte()
 
+once_flag = false
+jit_flag = false
+
 local function match_ll(subject, subject_len, regex, options, ctx)
     -- parse options
     local flags = {}

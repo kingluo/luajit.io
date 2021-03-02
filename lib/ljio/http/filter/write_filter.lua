@@ -66,7 +66,7 @@ local function write_header_filter(rsp)
 
     for _, field in ipairs(rsp.headers) do
         local val = rsp.headers[field]
-        if type(val) ~= "string" then
+        if val ~= nil and type(val) ~= "string" then
             val = tostring(val)
         end
         if val then
