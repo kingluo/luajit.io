@@ -59,6 +59,7 @@ wget https://luajit.org/download/LuaJIT-2.1.0-beta3.zip
 unzip LuaJIT-2.1.0-beta3.zip
 cd LuaJIT-2.1.0-beta3
 make install
+ln -sf luajit-2.1.0-beta3 /usr/local/bin/luajit
 ```
 
 ### http server
