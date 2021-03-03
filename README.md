@@ -42,6 +42,12 @@ On Debian Linux, you should install the dev packages of them, which contains the
 apt-get install zlib1g-dev libssl-dev libpcre3-dev
 ```
 
+On Centos Linux:
+
+``` shell
+yum install zlib-devel pcre-devel openssl-devel
+```
+
 ## Status
 
 This library is considered experimental and still under active development.
